@@ -13,18 +13,32 @@
     <object id="av-player" type="application/avplayer"></object>
     <video id="html5-player" playsinline></video>
 
+    <div id="backdrop" class="bd-plain"><div class="bd-layer"></div><div class="bd-layer"></div><div class="bd-shade"></div></div>
     <div id="app"></div>
+    <div id="sheet" class="hidden"></div>
 
     <div id="player-ui" class="hidden">
         <div id="subtitle"></div>
         <div id="osd">
-            <div id="osd-title"></div>
-            <div id="osd-info"></div>
-            <div id="osd-bar"><div id="osd-progress"></div></div>
-            <div id="osd-time"></div>
-            <div id="osd-hint">OK play/pause · ◀ ▶ seek 10s · ▲ ▼ seek 60s · Yellow: audio fix (transcode audio) · Blue: tracks · Back: stop</div>
+            <div id="osd-top"><span id="osd-ends"></span></div>
+            <div id="osd-state"></div>
+            <div id="osd-jump"></div>
+            <div id="osd-bottom">
+                <div id="osd-kicker"></div>
+                <div id="osd-title"></div>
+                <div id="osd-badges"></div>
+                <div id="osd-scrub">
+                    <div id="osd-thumb" class="hidden"><div class="img"></div><div class="t"></div></div>
+                    <div id="osd-bar"><div id="osd-progress"></div><div id="osd-marks"></div><div id="osd-head"></div></div>
+                </div>
+                <div id="osd-times"><span id="osd-elapsed"></span><span id="osd-chapter"></span><span id="osd-remaining"></span></div>
+                <div id="osd-hint"><span><b>▼</b> Info &amp; tracks</span><span><b>◀ ▶</b> −10 s / +30 s</span><span><b>CH</b> Chapters</span><span><i class="key-y"></i> Audio fix</span></div>
+            </div>
+            <div id="osd-spinner"></div>
         </div>
-        <div id="osd-tracks" class="hidden"></div>
+        <div id="skip" class="hidden">Skip Intro</div>
+        <div id="upnext" class="hidden"></div>
+        <div id="panel" class="hidden"></div>
     </div>
 
     <div id="toast" class="hidden"></div>
@@ -32,6 +46,8 @@
     <script src="js/util.js"></script>
     <script src="js/plex.js"></script>
     <script src="js/decide.js"></script>
+    <script src="js/subs.js"></script>
+    <script src="js/bif.js"></script>
     <script src="js/player.js"></script>
     <script src="js/ui.js"></script>
     <script src="js/main.js"></script>

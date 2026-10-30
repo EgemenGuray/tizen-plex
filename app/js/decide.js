@@ -19,8 +19,13 @@ var Decide = (function () {
 
     function streams(part, type) {
         return ((part && part.Stream) || []).filter(function (s) { return s.streamType === type; })
-            .sort(function (a, b) { return (a.index || 0) - (b.index || 0); });
+            // External files have no container index; list them after the embedded ones.
+            .sort(function (a, b) { return (a.index == null ? 1e6 : a.index) - (b.index == null ? 1e6 : b.index); });
     }
+
+    // Plex mixes ISO 639-2 bibliographic and terminology codes; compare on one of them.
+    var LANG_ALIAS = { deu: 'ger', fra: 'fre', zho: 'chi', nld: 'dut', ces: 'cze', ell: 'gre', fas: 'per', ron: 'rum', slk: 'slo', sqi: 'alb', hye: 'arm', eus: 'baq', mya: 'bur', kat: 'geo', isl: 'ice', mkd: 'mac', msa: 'may', cym: 'wel' };
+    function sameLang(a, b) { return !!a && !!b && (LANG_ALIAS[a] || a) === (LANG_ALIAS[b] || b); }
 
     function isAtmos(s) { return /atmos/i.test((s.extendedDisplayTitle || '') + ' ' + (s.displayTitle || '') + ' ' + (s.title || '')); }
     function isDts(s) { return /^dca|^dts/i.test(s.codec || ''); }
@@ -47,8 +52,9 @@ var Decide = (function () {
     function chooseAudio(part, requestedId, settings) {
         var audios = streams(part, 2);
         if (!audios.length) return { stream: null, transcode: false, reason: '' };
+        var preferred = settings.audioLang && audios.filter(function (s) { return sameLang(s.languageCode, settings.audioLang); })[0];
         var chosen = audios.filter(function (s) { return s.id === requestedId; })[0] ||
-            audios.filter(function (s) { return s.selected; })[0] || audios[0];
+            preferred || audios.filter(function (s) { return s.selected; })[0] || audios[0];
         var explicit = requestedId != null;
 
         function sameLangAlt(pred) {
@@ -77,6 +83,46 @@ var Decide = (function () {
             return { stream: chosen, transcode: true, reason: 'Audio codec ' + chosen.codec + ' is not playable here; the server will convert it.' };
         }
         return { stream: chosen, transcode: false, reason: '' };
+    }
+
+    function isImageSub(s) { return /pgs|hdmv|vobsub|dvd_sub|dvb_sub/i.test(s.codec || ''); }
+
+    /* Default subtitle for playback, from settings.subtitles ('off' | 'forced' | 'always') and settings.subLang.
+     * Image subtitles (PGS/VobSub) are skipped: the TV only hands text subtitles to apps. */
+    function chooseSubtitle(part, audio, settings) {
+        var subs = streams(part, 3).filter(function (s) { return !isImageSub(s); });
+        var mode = settings.subtitles || 'forced';
+        if (!subs.length || mode === 'off') return null;
+        var lang = settings.subLang || (audio && audio.languageCode);
+        var inLang = function (s) { return !lang || sameLang(s.languageCode, lang); };
+        if (mode === 'forced') {
+            return subs.filter(function (s) { return s.forced && (!audio || sameLang(s.languageCode, audio.languageCode) || inLang(s)); })[0] || null;
+        }
+        return subs.filter(function (s) { return s.selected; })[0] ||
+            subs.filter(function (s) { return inLang(s) && !s.forced && !s.hearingImpaired; })[0] ||
+            subs.filter(inLang)[0] || null;
+    }
+
+    // Apple TV-style badges for the details page.
+    function badges(plan) {
+        var out = [], m = plan.media || {}, v = plan.video, a = plan.audio;
+        if (m.videoResolution === '4k' || (m.width || 0) >= 3800) out.push('4K');
+        else if (/1080|720/.test(m.videoResolution || '')) out.push('HD');
+        if (v) {
+            var h = hdrLabel(v);
+            if (/^HDR10\+/.test(h)) out.push('HDR10+');
+            else if (v.DOVIPresent) out.push(v.DOVIProfile === 5 ? 'DV P5 · wrong colours' : 'HDR10 (DV base layer)');
+            else if (/^HDR10/.test(h)) out.push('HDR10');
+            else if (h === 'HLG') out.push('HLG');
+        }
+        if (a) {
+            if (isAtmos(a)) out.push('Dolby Atmos');
+            else if ((a.channels || 0) >= 8) out.push('7.1');
+            else if ((a.channels || 0) >= 6) out.push('5.1');
+        }
+        if (streams(plan.part, 3).some(function (s) { return s.hearingImpaired; })) out.push('SDH');
+        else if (streams(plan.part, 3).length) out.push('CC');
+        return out;
     }
 
     /* Full plan for one media version. */
@@ -109,5 +155,8 @@ var Decide = (function () {
         };
     }
 
-    return { plan: plan, streams: streams, hdrLabel: hdrLabel, audioLabel: audioLabel, isTrueHd: isTrueHd };
+    return {
+        plan: plan, streams: streams, hdrLabel: hdrLabel, audioLabel: audioLabel, isTrueHd: isTrueHd, isAtmos: isAtmos,
+        chooseSubtitle: chooseSubtitle, sameLang: sameLang, isImageSub: isImageSub, badges: badges
+    };
 })();

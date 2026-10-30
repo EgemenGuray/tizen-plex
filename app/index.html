@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=1920, height=1080">
+    <title>Plex HDR</title>
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Samsung product APIs (AVPlay, productinfo). Resolved by the TV runtime; 404s harmlessly in a desktop browser. -->
+    <script src="$WEBAPIS/webapis/webapis.js"></script>
+</head>
+<body>
+    <!-- AVPlay renders video on a hardware plane behind this object; the page must stay transparent while playing. -->
+    <object id="av-player" type="application/avplayer"></object>
+    <video id="html5-player" playsinline></video>
+
+    <div id="app"></div>
+
+    <div id="player-ui" class="hidden">
+        <div id="subtitle"></div>
+        <div id="osd">
+            <div id="osd-title"></div>
+            <div id="osd-info"></div>
+            <div id="osd-bar"><div id="osd-progress"></div></div>
+            <div id="osd-time"></div>
+            <div id="osd-hint">OK play/pause · ◀ ▶ seek 10s · ▲ ▼ seek 60s · Yellow: audio fix (transcode audio) · Blue: tracks · Back: stop</div>
+        </div>
+        <div id="osd-tracks" class="hidden"></div>
+    </div>
+
+    <div id="toast" class="hidden"></div>
+
+    <script src="js/util.js"></script>
+    <script src="js/plex.js"></script>
+    <script src="js/decide.js"></script>
+    <script src="js/player.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>

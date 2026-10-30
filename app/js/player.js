@@ -132,6 +132,7 @@ var Player = (function () {
         subStyle();
         drawMarks();
         setSubtitle(opts.subtitle || null, true);
+        if (opts.online) Online.downloadSubtitle(opts.online).then(function (text) { if (s === me) useOnline(opts.online, text, true); }, function () {});
         load(startMs || 0);
         reportTimer = setInterval(report, 10000);
         Plex.previewIndex(plan.part).then(function (buf) { if (s === me && buf) s.bif = Bif.parse(buf); });
@@ -141,7 +142,7 @@ var Player = (function () {
     function load(atMs) {
         var p = s.plan;
         var url;
-        $('subtitle').innerHTML = '';
+        $('subtitle').innerHTML = ''; $('subtitle')._html = null;
         if (s.mode === 'direct') {
             url = Plex.directPlayUrl(p.part);
             s.baseOffset = 0;
@@ -220,8 +221,9 @@ var Player = (function () {
     // stream: Plex subtitle stream or null (off). External files are fetched and drawn by the app.
     function setSubtitle(stream, quiet) {
         clearTimeout(subTimer);
-        $('subtitle').innerHTML = '';
+        $('subtitle').innerHTML = ''; $('subtitle')._html = null;
         s.sub = stream ? { stream: stream, cues: null } : null;
+        if (!quiet) Memory.setTracks(s.item, { subId: stream ? stream.id : null, online: null });
         if (stream && stream.key) {
             var mine = s.sub;
             Plex.subtitleText(stream.key).then(function (raw) {
@@ -235,7 +237,7 @@ var Player = (function () {
     }
 
     function embeddedSubtitle(text, duration) {
-        if (!s.sub || s.sub.stream.key) return;
+        if (!s.sub || s.sub.stream.key || s.sub.stream.online) return;
         clearTimeout(subTimer);
         var html = Subs.clean(text || '').replace(/\n/g, '<br>');
         $('subtitle').innerHTML = html ? '<span>' + html + '</span>' : '';
@@ -383,6 +385,7 @@ var Player = (function () {
 
     function report() {
         if (!s) return;
+        if (s.prepared) Memory.savePosition(s.item, s.lastTime, s.duration);
         Plex.timeline(s.item, s.prepared && engine.isPaused() ? 'paused' : 'playing', s.lastTime, s.duration);
     }
 
@@ -391,8 +394,7 @@ var Player = (function () {
         s.lastTime = target;
         if (s.mode === 'direct') engine.seek(target);
         else { engine.close(); load(target); }   // transcoded stream: restart the transcode at the new offset
-        $('subtitle').innerHTML = '';
-        $('subtitle')._html = null;
+        $('subtitle').innerHTML = ''; $('subtitle')._html = null;
         drawTime();
     }
 
@@ -515,25 +517,26 @@ var Player = (function () {
             if (s.panel.results) {
                 if (!s.panel.results.length) items.push({ label: 'No subtitles found', disabled: true });
                 s.panel.results.forEach(function (r) {
-                    items.push({ label: r.displayTitle || r.title || r.language, detail: [r.providerTitle, r.score ? 'match ' + r.score : ''].filter(Boolean).join(' · '),
-                        action: function () { downloadSubtitle(r); } });
+                    items.push({ label: r.label, detail: r.detail, action: function () { downloadSubtitle(r); } });
                 });
                 items.push({ label: '‹ Back', action: function () { s.panel.results = null; s.panel.sel = 0; renderPanel(); }, sep: true });
                 return items;
             }
             var cur2 = s.sub && s.sub.stream;
             items.push({ label: 'Off', checked: !cur2, action: function () { setSubtitle(null); } });
+            if (cur2 && cur2.online) items.push({ label: cur2.displayTitle, detail: 'Downloaded from OpenSubtitles', checked: true });
             Decide.streams(p.part, 3).forEach(function (t) {
                 var img = Decide.isImageSub(t);
                 items.push({ label: t.extendedDisplayTitle || t.displayTitle || t.codec, checked: t === cur2, disabled: img,
                     detail: img ? 'Image subtitles need the video re-encoded, which would lose HDR10+' : (t.key ? 'External file' : (s.mode === 'direct' ? 'Embedded' : 'Embedded: direct play only')),
                     action: function () { setSubtitle(t); } });
             });
-            var lang = s.settings.subLang || (p.audio && p.audio.languageCode) || 'eng';
-            items.push({ label: 'Search online…', detail: 'Uses your server\'s subtitle search (' + (LANG2[lang] || lang) + ')', action: function () { searchSubtitles(lang); }, sep: true });
+            var langs = searchLangs();
+            items.push({ label: 'Search online…', detail: (Online.keys().opensubtitles ? 'OpenSubtitles and your server' : 'Your server\'s subtitle search (add an OpenSubtitles key in Settings for more)') +
+                ' · ' + langs.join(', '), action: searchSubtitles, sep: true });
             items.push({ label: 'Delay', value: (s.subOffset >= 0 ? '+' : '') + (s.subOffset / 1000).toFixed(1) + ' s', adjust: function (d) {
                 s.subOffset += d * 100;
-                if (s.sub && !s.sub.stream.key) engine.subtitleDelay(s.subOffset);
+                if (s.sub && !s.sub.stream.key && !s.sub.stream.online) engine.subtitleDelay(s.subOffset);
             }, detail: '◀ ▶ to shift. Positive = later.' });
             ['subSize', 'subColor', 'subBg', 'subPos'].forEach(function (k) {
                 var label = { subSize: 'Size', subColor: 'Colour', subBg: 'Style', subPos: 'Position' }[k];
@@ -555,6 +558,7 @@ var Player = (function () {
     function chooseAudio(a) {
         var res = Decide.plan(s.item, (s.item.Media || []).indexOf(s.plan.media), a.id, s.settings);
         Plex.selectStreams(s.plan.part.id, a.id);
+        Memory.setTracks(s.item, { audioId: a.id, mediaIndex: (s.item.Media || []).indexOf(s.plan.media) });
         var needRestart = res.mode !== s.mode || s.mode !== 'direct';
         s.plan = res;
         s.mode = res.mode;
@@ -564,18 +568,64 @@ var Player = (function () {
         renderPanel();
     }
 
-    function searchSubtitles(lang) {
-        var me = s;
-        Util.toast('Searching for subtitles…', 3000);
-        Plex.searchSubtitles(s.item, LANG2[lang] || lang).then(function (res) {
-            if (s !== me || !s.panel) return;
-            s.panel.results = res; s.panel.sel = 0; renderPanel();
-        }, function (e) { Util.toast('Subtitle search failed: ' + e.message, 6000); });
+    // Two-letter codes for the subtitle language setting, the audio language, and English.
+    function searchLangs() {
+        var out = [];
+        [s.settings.subLang, s.plan.audio && s.plan.audio.languageCode, 'eng'].forEach(function (l) {
+            var c = l && (LANG2[l] || (l.length === 2 ? l : null));
+            if (c && out.indexOf(c) < 0) out.push(c);
+        });
+        return out;
     }
 
-    // Save the chosen result on the server, then use the new external stream. Falls back to reading the result directly.
-    function downloadSubtitle(r) {
-        var me = s;
+    // OpenSubtitles (matched on this file's hash first, like Infuse) and the server's own search, side by side.
+    function searchSubtitles() {
+        var me = s, langs = searchLangs();
+        Util.toast('Searching for subtitles…', 3000);
+        var showP = s.item.type === 'episode' ? Plex.metadata(s.item.grandparentRatingKey).catch(function () { return null; }) : Promise.resolve(null);
+        var os = Online.keys().opensubtitles ? showP.then(function (show) {
+            return Online.searchSubtitles(s.item, show, langs, Plex.directPlayUrl(s.plan.part), s.plan.part.size);
+        }).then(function (res) {
+            return res.slice(0, 30).map(function (r) {
+                return { source: 'opensubtitles', raw: r, label: '[' + (r.language || '?').toUpperCase() + '] ' + r.title,
+                    detail: ['OpenSubtitles', r.hashMatch ? 'exact match for this file' : '', r.hearingImpaired ? 'SDH' : '', r.ai ? 'machine translated' : '',
+                        r.downloads ? r.downloads.toLocaleString() + ' downloads' : ''].filter(Boolean).join(' · ') };
+            });
+        }, function (e) { Util.toast('OpenSubtitles: ' + e.message, 6000); return []; }) : Promise.resolve([]);
+        var server = Promise.all(langs.slice(0, 2).map(function (l) {
+            return Plex.searchSubtitles(s.item, l).catch(function () { return []; });
+        })).then(function (lists) {
+            return [].concat.apply([], lists).map(function (r) {
+                return { source: 'plex', raw: r, label: r.displayTitle || r.title || r.language,
+                    detail: ['Server: ' + (r.providerTitle || 'subtitle search'), r.score ? 'match ' + r.score : ''].filter(Boolean).join(' · ') };
+            });
+        });
+        Promise.all([os, server]).then(function (r) {
+            if (s !== me || !s.panel) return;
+            s.panel.results = r[0].concat(r[1]); s.panel.sel = 0; renderPanel();
+        });
+    }
+
+    // Use a downloaded subtitle for this session and remember it for the next time this title is played.
+    function useOnline(result, text, quiet) {
+        var cues = Subs.parse(text, 'srt');
+        if (!cues.length) { if (!quiet) Util.toast('That subtitle file was empty or unreadable.', 5000); return; }
+        setSubtitle(null, true);
+        s.sub = { stream: { id: -1, online: result, displayTitle: '[' + (result.language || '').toUpperCase() + '] ' + result.title }, cues: cues };
+        Memory.setTracks(s.item, { subId: 'online', online: result });
+        if (s.panel) { s.panel.results = null; renderPanel(); }
+        if (!quiet) Util.toast('Subtitles loaded', 2500);
+    }
+
+    function downloadSubtitle(entry) {
+        var me = s, r = entry.raw;
+        if (entry.source === 'opensubtitles') {
+            Util.toast('Downloading…', 2000);
+            Online.downloadSubtitle(r).then(function (text) { if (s === me) useOnline(r, text); },
+                function (e) { Util.toast('OpenSubtitles download failed: ' + e.message, 6000); });
+            return;
+        }
+        // Server result: save it on the server, then use the new external stream. Falls back to reading it directly.
         var known = Decide.streams(s.plan.part, 3).map(function (t) { return t.id; });
         Plex.saveSubtitle(s.item, r).then(function () { return Plex.metadata(s.item.ratingKey); }).then(function (fresh) {
             if (s !== me) return;
@@ -713,12 +763,13 @@ var Player = (function () {
         Bif.release(cur.bif);
         Plex.stopTranscode(cur.sessionId);
         Plex.timeline(cur.item, 'stopped', cur.lastTime, cur.duration);
+        if (cur.prepared) { Memory.savePosition(cur.item, cur.lastTime, cur.duration); Memory.flush(); }
         if (cur.duration && cur.lastTime / cur.duration > 0.9) Plex.scrobble(cur.item);
         document.body.classList.remove('playing');
         $('player-ui').className = 'hidden';
         $('panel').classList.add('hidden');
         $('upnext').classList.add('hidden');
-        $('subtitle').innerHTML = '';
+        $('subtitle').innerHTML = ''; $('subtitle')._html = null;
         if (notify && cur.onExit) cur.onExit();
     }
 

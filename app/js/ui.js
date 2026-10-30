@@ -10,7 +10,7 @@ var UI = (function () {
 
     var DEFAULTS = {
         truehd: 'auto', audioLang: '', subtitles: 'forced', subLang: '', subSize: 'm', subColor: 'white', subBg: 'shadow',
-        subPos: 'bottom', autoplay: true, autoSkipIntro: false, picture: 'letterbox'
+        subPos: 'bottom', autoplay: true, autoSkipIntro: false, picture: 'letterbox', tmdbArt: true
     };
     var settings = Util.store('settings') || {};
     Object.keys(DEFAULTS).forEach(function (k) { if (settings[k] === undefined) settings[k] = DEFAULTS[k]; });
@@ -198,6 +198,11 @@ var UI = (function () {
             title = item.tag || ('Chapter ' + item.index); sub = Util.fmtTime(item.startTimeOffset);
         }
         var img = lazyImg('img', src);
+        if (!src && kind === 'poster') {
+            Online.artwork(item).then(function (a) {
+                if (a && a.poster) { img.style.backgroundImage = 'url("' + a.poster + '")'; var f = img.querySelector('.fallback'); if (f) f.parentNode.removeChild(f); }
+            });
+        }
         if (kind === 'person' && !src) img.innerHTML = '<span>' + Util.esc((item.tag || '?').split(' ').map(function (w) { return w[0]; }).join('').slice(0, 2)) + '</span>';
         if (kind === 'poster' && !src) img.innerHTML = '<span class="fallback">' + Util.esc(title) + '</span>';
         if (item.viewOffset && item.duration) {
@@ -293,6 +298,40 @@ var UI = (function () {
         openSheet(title, options.map(function (o) {
             return { label: o.label, detail: o.detail, checked: o.value === current, action: function () { cb(o.value); } };
         }), { note: note });
+    }
+
+    // Free text with the remote: a one-line keyboard with a shift key, for API keys and account names.
+    function textEntry(title, value, cb, note) {
+        var text = value || '', upper = false;
+        var display = el('div', 'entry-display', '');
+        var keys = el('div', 'track hlist keyboard');
+        var wrap = el('div', 'entry-kb');
+        wrap.appendChild(keys);
+        function draw() {
+            display.innerHTML = (text ? Util.esc(text) : '<span class="muted">Empty</span>') + '<i class="caret"></i>';
+            Array.prototype.forEach.call(keys.children, function (k) {
+                if (k.getAttribute('data-c')) k.textContent = upper ? k.getAttribute('data-c').toUpperCase() : k.getAttribute('data-c');
+            });
+        }
+        var chars = 'abcdefghijklmnopqrstuvwxyz0123456789-_.@'.split('');
+        ['⇧'].concat(chars).concat(['⌫', 'Clear', 'Done']).forEach(function (k) {
+            var b = el('div', 'key focusable' + (k.length > 1 ? ' wide' : ''), k);
+            if (k.length === 1 && k !== '⇧' && k !== '⌫') b.setAttribute('data-c', k);
+            b._select = function () {
+                if (k === '⇧') upper = !upper;
+                else if (k === '⌫') text = text.slice(0, -1);
+                else if (k === 'Clear') text = '';
+                else if (k === 'Done') { closeSheet(); cb(text); return; }
+                else text += upper ? k.toUpperCase() : k;
+                draw();
+            };
+            keys.appendChild(b);
+        });
+        draw();
+        var foot = el('div', 'entry-wrap');
+        foot.appendChild(display);
+        foot.appendChild(wrap);
+        openSheet(title, [], { footer: foot, wide: true, note: note });
     }
 
     // Number pad for Plex Home PINs.
@@ -412,15 +451,30 @@ var UI = (function () {
     /* ---------- playback entry points ---------- */
 
     // item: full metadata. opts: { mediaIndex, audioId, sub (stream | null = off | undefined = default), at }
+    // Without explicit choices, the audio track and subtitle you used last time for this title are picked again.
     function play(item, opts) {
         opts = opts || {};
-        var plan = Decide.plan(item, opts.mediaIndex || 0, opts.audioId == null ? null : opts.audioId, settings);
+        var mem = Memory.tracks(item);
+        var mediaIndex = opts.mediaIndex != null ? opts.mediaIndex : (mem.mediaIndex || 0);
+        if (!(item.Media || [])[mediaIndex]) mediaIndex = 0;
+        var part0 = ((item.Media[mediaIndex] || {}).Part || [])[0];
+        var has = function (type, id) { return Decide.streams(part0, type).filter(function (x) { return x.id === id; })[0]; };
+        var audioId = opts.audioId != null ? opts.audioId : (mem.audioId != null && has(2, mem.audioId) ? mem.audioId : null);
+        var plan = Decide.plan(item, mediaIndex, audioId, settings);
         if (!plan.part) { Util.toast('This item has no playable file.'); return; }
-        var sub = opts.sub !== undefined ? opts.sub : Decide.chooseSubtitle(plan.part, plan.audio, settings);
+        var online = null;
+        var sub = opts.sub;
+        if (sub === undefined && mem.subId !== undefined) {
+            if (mem.subId === 'online' && mem.online) { sub = null; online = mem.online; }
+            else sub = mem.subId === null ? null : (has(3, mem.subId) || undefined);
+        }
+        if (sub === undefined) sub = Decide.chooseSubtitle(plan.part, plan.audio, settings);
+        if (opts.audioId != null || opts.mediaIndex != null) Memory.setTracks(item, { audioId: plan.audio && plan.audio.id, mediaIndex: mediaIndex });
+        if (opts.sub !== undefined) Memory.setTracks(item, { subId: opts.sub ? opts.sub.id : null, online: null });
         if (stack.length) stack[stack.length - 1].focusIndex = focusables().indexOf(focused);
         closeSheet(true);
         Plex.selectStreams(plan.part.id, plan.audio && plan.audio.id, sub ? sub.id : 0).then(function () {
-            Player.start(item, plan, settings, opts.at || 0, { subtitle: sub, onExit: function () { show(); } });
+            Player.start(item, plan, settings, opts.at || 0, { subtitle: sub, online: online, onExit: function () { show(); } });
         });
     }
 
@@ -435,7 +489,7 @@ var UI = (function () {
                     return s1 && Plex.children(s1.ratingKey).then(function (eps) { if (eps[0]) playKey(eps[0].ratingKey, true); });
                 });
             }
-            play(item, { at: fromStart ? 0 : item.viewOffset || 0 });
+            play(item, { at: fromStart ? 0 : Memory.resumeAt(item) });
         }).catch(function (e) { Util.toast(e.message, 6000); });
     }
 
@@ -501,8 +555,6 @@ var UI = (function () {
         else if (item.duration) bits.push(Util.fmtDuration(item.duration));
         var g = (item.Genre || []).slice(0, 2).map(function (x) { return x.tag; }).join(', ');
         if (g) bits.push(Util.esc(g));
-        if (item.audienceRating) bits.push('★ ' + Number(item.audienceRating).toFixed(1));
-        else if (item.rating) bits.push('★ ' + Number(item.rating).toFixed(1));
         return bits.map(function (b) { return typeof b === 'number' ? String(b) : b; }).join('<i class="dot">·</i>');
     }
 
@@ -511,6 +563,47 @@ var UI = (function () {
         var showName = item.type === 'episode' ? '<div class="kicker">' + Util.esc(item.grandparentTitle) + '</div>' : '';
         if (logo) return showName + '<img class="logo' + (big ? ' big' : '') + '" src="' + Plex.imageUrl(logo, 900, 360) + '">';
         return showName + '<h1 class="title' + (big ? ' big' : '') + '">' + Util.esc(item.title) + '</h1>';
+    }
+
+    /* ---------- ratings and internet artwork ---------- */
+
+    var SCORES = [
+        ['imdb', 'IMDb', 's-imdb'], ['rtCritic', 'Tomatometer', 's-rt'], ['rtAudience', 'RT Audience', 's-rta'],
+        ['metaCritic', 'Metascore', 's-mc'], ['metaUser', 'Metacritic Users', 's-mu'], ['letterboxd', 'Letterboxd', 's-lb']
+    ];
+    function ratingsHtml(r) {
+        if (!r) return '';
+        return SCORES.filter(function (x) { return r[x[0]]; }).map(function (x) {
+            var cls = x[2];
+            if (x[0] === 'metaCritic') cls += +r.metaCritic >= 61 ? ' good' : +r.metaCritic >= 40 ? ' mid' : ' low';
+            if (x[0] === 'metaUser') cls += +r.metaUser >= 6.1 ? ' good' : +r.metaUser >= 4 ? ' mid' : ' low';
+            return '<span class="score ' + cls + '"><b>' + x[1] + '</b>' + Util.esc(r[x[0]]) + '</span>';
+        }).join('');
+    }
+    function fillRatings(container, item) {
+        var host = container.querySelector('.ratings');
+        if (!host) return;
+        host.innerHTML = ratingsHtml(Online.plexRatings(item));
+        Online.ratings(item).then(function (r) {
+            var h = container.querySelector('.ratings');
+            if (h) h.innerHTML = ratingsHtml(r);
+        });
+    }
+
+    // Title logo, backdrop and poster from TMDB where Plex has none.
+    function enhance(container, item, setBackdrop) {
+        if (item.type !== 'movie' && item.type !== 'show') return;
+        Online.artwork(item).then(function (a) {
+            if (!a) return;
+            var h = container.querySelector('h1.title');
+            if (a.logo && h && !Plex.clearLogo(item)) {
+                var img = new Image();
+                img.className = h.className.replace('title', 'logo');
+                img.onload = function () { if (h.parentNode) h.parentNode.replaceChild(img, h); };
+                img.src = a.logo;
+            }
+            if (setBackdrop && !artOf(item) && a.backdrop) backdrop(a.backdrop, 'details');
+        });
     }
 
     function hero(items) {
@@ -528,7 +621,9 @@ var UI = (function () {
             void body.offsetWidth;   // restart the fade
             body.classList.add('in');
             body.innerHTML = titleBlock(it, true) + '<div class="meta">' + metaLine(it) + '</div>' +
+                '<div class="ratings">' + ratingsHtml(Online.plexRatings(it)) + '</div>' +
                 '<p class="summary clamp3">' + Util.esc(it.summary || '') + '</p>';
+            enhance(body, it);
             var focusIdx = focused && btns.contains(focused) ? Array.prototype.indexOf.call(btns.children, focused) : -1;
             btns.innerHTML = '';
             var resume = it.viewOffset && it.duration;
@@ -670,15 +765,62 @@ var UI = (function () {
         });
     }
 
-    function personScreen(page, role, sectionId) {
-        return gridScreen(page, role.tag, Plex.sectionItems(sectionId, { actor: role.id, sort: 'originallyAvailableAt:desc' }).then(function (mc) { return mc.Metadata || []; }));
+    // Everything in the movie and TV libraries this person is credited on, in any role.
+    function personScreen(page, person) {
+        backdrop(null, 'plain');
+        var kinds = person.kinds || [person.kind || 'actor'];
+        return Promise.all(kinds.map(function (k) { return Plex.personItems(k, person.id); })).then(function (lists) {
+            var seen = {}, items = [];
+            [].concat.apply([], lists).forEach(function (it) { if (!seen[it.ratingKey]) { seen[it.ratingKey] = 1; items.push(it); } });
+            items.sort(function (a, b) { return (b.year || 0) - (a.year || 0); });
+            var head = el('section', 'person-head');
+            head.setAttribute('data-anchor', 'top');
+            var face = lazyImg('person-face', person.thumb ? Plex.imageUrl(person.thumb, 300, 300) : '');
+            if (!person.thumb) face.textContent = (person.tag || '?').split(' ').map(function (w) { return w[0]; }).join('').slice(0, 2);
+            head.appendChild(face);
+            head.appendChild(el('div', 'person-text', '<h1 class="page-title">' + Util.esc(person.tag) + '</h1><div class="meta">' +
+                Util.esc(person.roles.join(' · ')) + '<i class="dot">·</i>' + items.length + (items.length === 1 ? ' title' : ' titles') + ' in your library</div>'));
+            page.appendChild(head);
+            page.setAttribute('data-offset', '300');
+            var grid = el('div', 'grid');
+            items.forEach(function (it) { grid.appendChild(card(it, 'poster')); });
+            page.appendChild(grid);
+            if (!items.length) page.appendChild(el('p', 'muted pad', 'Nothing else in your library.'));
+        });
+    }
+
+    // Apple TV-style Cast & Crew: actors with their characters, then directors, writers and producers.
+    function people(item) {
+        var out = [], byId = {};
+        function add(list, kind, label) {
+            (list || []).forEach(function (p) {
+                var id = p.id || p.tag;
+                var caption = kind === 'actor' ? (p.role || 'Actor') : label;
+                if (byId[id]) {
+                    // Same person in two roles (e.g. writer-director): one card, both roles.
+                    byId[id].role += ', ' + label; byId[id].kinds.push(kind); byId[id].roles.push(label);
+                    return;
+                }
+                var person = { id: p.id, tag: p.tag, thumb: p.thumb, role: caption, kind: kind, kinds: [kind], roles: [kind === 'actor' ? 'Actor' : label] };
+                byId[id] = person;
+                out.push(person);
+            });
+        }
+        add(item.Role, 'actor', 'Actor');
+        add(item.Director, 'director', 'Director');
+        add(item.Writer, 'writer', 'Writer');
+        add(item.Producer, 'producer', 'Producer');
+        return out;
     }
 
     function castShelf(item) {
-        var roles = (item.Role || []).slice(0, 30);
-        if (!roles.length) return null;
-        return shelf('Cast & Crew', roles, 'person', {
-            onSelect: function (r) { if (r.id && item.librarySectionID) push(function (p) { return personScreen(p, r, item.librarySectionID); }); }
+        var ppl = people(item);
+        if (!ppl.length) return null;
+        return shelf('Cast & Crew', ppl, 'person', {
+            onSelect: function (p) {
+                if (p.id) push(function (pg) { return personScreen(pg, p); });
+                else Util.toast('Plex has no ID for ' + p.tag + ', so their other titles can\'t be listed.');
+            }
         });
     }
 
@@ -692,7 +834,10 @@ var UI = (function () {
             var top = el('section', 'detail-hero');
             top.setAttribute('data-anchor', 'top');
             top.innerHTML = titleBlock(show, true) + '<div class="meta">' + metaLine(show) + '</div>' +
+                '<div class="ratings"></div>' +
                 '<p class="summary clamp3">' + Util.esc(show.summary || '') + '</p>';
+            fillRatings(top, show);
+            enhance(top, show, true);
             var btns = el('div', 'hlist btn-row');
             var playLabel = onDeck ? (onDeck.viewOffset ? 'Resume ' : 'Play ') + epCode(onDeck) : 'Play';
             var pb = button('<span class="ico">▶</span>' + playLabel, function () { playKey(onDeck ? onDeck.ratingKey : show.ratingKey, false); }, 'primary');
@@ -745,7 +890,8 @@ var UI = (function () {
 
     function detailsScreen(page, ratingKey) {
         return Plex.metadata(ratingKey).then(function (item) {
-            var st = { mediaIndex: 0, audioId: null, sub: undefined };
+            var mem = Memory.tracks(item);
+            var st = { mediaIndex: (item.Media || [])[mem.mediaIndex] ? mem.mediaIndex : 0, audioId: mem.audioId != null ? mem.audioId : null, sub: undefined };
             var extras = (item.Extras && item.Extras.Metadata) || [];
             var trailer = extras.filter(function (x) { return x.subtype === 'trailer' || x.extraType === 1; })[0];
             backdrop(Plex.imageUrl(artOf(item), 1920, 1080), 'details');
@@ -755,7 +901,13 @@ var UI = (function () {
             page.appendChild(top);
 
             function planOf() { return Decide.plan(item, st.mediaIndex, st.audioId, settings); }
-            function subOf(plan) { return st.sub !== undefined ? st.sub : Decide.chooseSubtitle(plan.part, plan.audio, settings); }
+            function subOf(plan) {
+                if (st.sub !== undefined) return st.sub;
+                if (mem.subId === 'online' && mem.online) return { displayTitle: 'downloaded (' + (mem.online.language || '').toUpperCase() + ')', online: true };
+                if (mem.subId === null) return null;
+                var m = Decide.streams(plan.part, 3).filter(function (x) { return x.id === mem.subId; })[0];
+                return m || Decide.chooseSubtitle(plan.part, plan.audio, settings);
+            }
 
             function render() {
                 var plan = planOf();
@@ -770,11 +922,14 @@ var UI = (function () {
                     (item.type === 'episode' ? '<h2 class="ep-title">' + Util.esc(item.title) + '</h2>' : '') +
                     '<div class="meta">' + metaLine(item) + '</div>' +
                     '<div class="badges">' + badges + '</div>' +
+                    '<div class="ratings"></div>' +
                     '<p class="summary clamp3">' + Util.esc(item.summary || '') + '</p>' +
                     '<div class="route">' + route + (sub ? ' · Subtitles: ' + Util.esc(sub.displayTitle || sub.language || 'on') : '') + '</div>' +
                     (notes.length ? '<div class="notes">' + notes.map(function (n) { return '<div>' + Util.esc(n) + '</div>'; }).join('') + '</div>' : '');
+                fillRatings(top, item);
+                enhance(top, item, true);
                 var btns = el('div', 'hlist btn-row');
-                var resumeAt = item.viewOffset || 0;
+                var resumeAt = Memory.resumeAt(item);
                 var opts = function (at) { return { mediaIndex: st.mediaIndex, audioId: st.audioId, sub: st.sub, at: at }; };
                 btns.appendChild(button('<span class="ico">▶</span>' + (resumeAt ? 'Resume ' + Util.fmtTime(resumeAt) : 'Play'), function () { play(item, opts(resumeAt)); }, 'primary', 'play'));
                 if (resumeAt) btns.appendChild(button('Start Over', function () { play(item, opts(0)); }, '', 'restart'));
@@ -956,6 +1111,7 @@ var UI = (function () {
             { value: 'fill', label: 'Stretch to fill' }
         ],
         autoplay: [{ value: true, label: 'On' }, { value: false, label: 'Off' }],
+        tmdbArt: [{ value: true, label: 'Fill in missing artwork' }, { value: false, label: 'Off' }],
         autoSkipIntro: [{ value: true, label: 'On' }, { value: false, label: 'Off' }]
     };
     function optLabel(key) {
@@ -1001,6 +1157,20 @@ var UI = (function () {
             opt('Autoplay next episode', 'autoplay');
             opt('Skip intros automatically', 'autoSkipIntro');
             opt('Picture size', 'picture');
+            section('Online services');
+            function keyRow(label, name, note, secret) {
+                var v = Online.keys()[name];
+                row(label, v ? (secret ? '••••••' : v.slice(0, 4) + '…' + v.slice(-3)) : 'Not set', function () {
+                    textEntry(label, v, function (nv) { Online.setKey(name, nv.trim()); show(); }, note);
+                }, 'k-' + name);
+            }
+            keyRow('TMDB API key', 'tmdb', 'Free at themoviedb.org → Settings → API. Fills in title logos, backdrops and posters Plex doesn\'t have.');
+            opt('Artwork from TMDB', 'tmdbArt');
+            keyRow('OMDb API key', 'omdb', 'Free at omdbapi.com. Adds IMDb, Rotten Tomatoes and Metascore when Plex lacks them.');
+            keyRow('OpenSubtitles API key', 'opensubtitles', 'Free at opensubtitles.com → Profile → API consumers. Lets "Search online…" find subtitles like Infuse does.');
+            keyRow('OpenSubtitles username', 'osUser', 'Optional. Signing in raises the daily download limit.');
+            keyRow('OpenSubtitles password', 'osPass', 'Optional, stored only on this TV.', true);
+            col.appendChild(el('p', 'muted small', 'Typing keys with the remote is slow: you can also put them in app/js/keys.js before building (see keys.example.js).'));
             section('Help');
             row('TV and soundbar setup', '', function () {
                 openSheet('Sound Setup for the Q990C', [{ html:

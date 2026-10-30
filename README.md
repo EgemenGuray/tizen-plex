@@ -26,6 +26,9 @@ It is a sideloaded Tizen web app. It plays through Samsung's AVPlay API, the sam
 - **Libraries**: poster grid that loads more as you scroll, with Sort (title, date added, release date, rating, recently watched), Unwatched only, Genre, and Collections.
 - **Show page**: backdrop, Play/Resume next episode, Mark watched, season pills (moving onto a season loads it), an episode row with stills, Cast & Crew, More Like This.
 - **Details page** (movie or episode): logo or title, metadata, badges (4K, HDR10+, Dolby Atmos, 5.1/7.1, CC/SDH), summary, and one line that says what will happen when you press Play (direct play or converted audio, which track, and why). Buttons: Resume / Play, Start Over, Trailer, Audio & Subtitles, Version, Mark Watched, Info (full technical sheet). Rows below: Chapters (press one to start there), the rest of the season, Cast & Crew (press a person for their films in your library), Extras, More Like This.
+- **Ratings** on the top shelf, show and details pages: IMDb, Rotten Tomatoes (Tomatometer and audience), Metascore (critics), Metacritic user score, and Letterboxd (movies). See *Online services* below for where each comes from.
+- **Cast & Crew** like Apple TV: every actor with their role, then directors, writers and producers (one card per person, all their jobs listed). Press a person to see everything in your libraries they acted in, directed, wrote or produced, movies and shows together, newest first.
+- **Artwork from the internet**: with a TMDB key, titles get TMDB's logo when Plex has none, a TMDB backdrop when Plex has no background art, and a TMDB poster for cards with no poster.
 - **Search** with a one-line on-screen keyboard (tvOS style); results update as you type.
 - **Settings**: Plex Home user switching (with PIN pad), server, TrueHD mode, preferred audio language, subtitle mode/language/size/colour/style/position, autoplay next episode, auto-skip intros, picture size, sound setup help and a remote-control cheat sheet.
 
@@ -39,6 +42,7 @@ It is a sideloaded Tizen web app. It plays through Samsung's AVPlay API, the sam
 - DTS tracks: another track in the same language is used if there is one, otherwise the server converts the audio.
 - If direct play fails to open, the app retries once with the audio converted.
 - Reports progress to Plex (resume points and watched status).
+- **Remembers each title on the TV too**: where you stopped, the version, the audio track, and the subtitle you picked (including a downloaded one, which is kept on the TV so a replay doesn't use your download quota). Resume uses whichever is newer, the TV's record or the server's, so it still works when a progress report didn't reach the server or a Plex Home user doesn't sync. Playing from the start or finishing a title clears its resume point.
 
 ### The player
 A translucent overlay in the Apple TV layout: title and badges, a timeline with chapter ticks and intro/credits segments, elapsed and remaining time, the current chapter name and "Ends at" time. Video is drawn by the TV on a hardware plane under the page, so the overlay uses dark gradients rather than blur (the page cannot blur the video plane).
@@ -56,8 +60,27 @@ A translucent overlay in the Apple TV layout: title and badges, a timeline with 
 
 - **Skip Intro** appears during Plex intro markers (or skips by itself if you turn that on). **Up Next** appears at the credits marker (or 30 s before the end) with a 10 s countdown; it keeps your subtitle language for the next episode.
 - **Preview thumbnails** come from the server's video preview thumbnails (BIF). Turn on "Generate video preview thumbnails" in the Plex server settings if you don't see them.
-- **Subtitles**: embedded text subtitles (direct play) and external SRT/ASS/SSA/VTT files, drawn by the app so size, colour, outline/box and position can be changed live. A delay of ±0.1 s steps; **Search online…** uses your server's own subtitle search (OpenSubtitles agent) and saves the result to the server. Forced-only / always / off modes with a preferred language pick a default track.
+- **Subtitles**: embedded text subtitles (direct play) and external SRT/ASS/SSA/VTT files, drawn by the app so size, colour, outline/box and position can be changed live. A delay of ±0.1 s steps. **Search online…** searches OpenSubtitles directly (like Infuse) and your server's own subtitle search, in your subtitle and audio languages. OpenSubtitles results matching your exact file come first: the app computes the OpenSubtitles file hash by reading 64 KB from each end of the file over the network. Picking one downloads it and shows it straight away. Forced-only / always / off modes with a preferred language pick a default track.
 - **Picture**: original (letterbox), auto aspect ratio, or stretch to fill.
+
+### Switching audio and subtitles during playback
+Press **▼** (or **Info**) and move to the **Audio** or **Subtitles** tab, or jump there with **Blue** (audio) or **Green** (subtitles). Audio lists every track in the file (DTS is shown but converted by the server); switching inside a direct-played file is instant, otherwise playback restarts at the same point. Your choice is remembered for that title.
+
+## Online services (optional, all free)
+Enter keys in **Settings → Online services** with the on-screen keyboard, or put them in `app/js/keys.js` before building (copy `app/js/keys.example.js`; `keys.js` is git-ignored). Without keys the app works as before and uses only what Plex provides.
+
+| Key | Get it at | Used for |
+|---|---|---|
+| TMDB | themoviedb.org → Settings → API (v3 key or v4 read token) | Logos, backdrops and posters missing from Plex |
+| OMDb | omdbapi.com → API Key | IMDb rating, Metascore, Rotten Tomatoes when Plex doesn't have them |
+| OpenSubtitles | opensubtitles.com → Profile → API consumers | Online subtitle search and download. Add your username and password to raise the daily download limit |
+
+Where the ratings come from:
+- **IMDb and Rotten Tomatoes**: Plex's own ratings first (when your server's agent provides them), then OMDb.
+- **Metascore (critics)**: OMDb, or Metacritic's page.
+- **Metacritic user score** and **Letterboxd**: no public API exists, so the app reads the public Metacritic and Letterboxd pages for the title and pulls the score out. This works as long as those sites keep their page layout; if they change it, that score just doesn't show. Letterboxd is looked up by TMDB id, so it needs the title matched by Plex's movie agent.
+
+Ratings are cached for 7 days and artwork indefinitely, so browsing doesn't repeat requests.
 
 ## Infuse feature parity
 
@@ -70,7 +93,11 @@ A translucent overlay in the Apple TV layout: title and badges, a timeline with 
 | Scrubbing with thumbnails | Yes | Needs server preview thumbnails |
 | Audio and subtitle track switching | Yes | Embedded subtitles in direct play; external files always |
 | Subtitle styling, delay, forced subtitles, preferred languages | Yes | Delay for embedded subtitles uses AVPlay's `setSubtitlePosition`, not checked on the QN900B yet |
-| Download subtitles (OpenSubtitles) | Yes, through Plex | Uses the server's subtitle search instead of an OpenSubtitles account |
+| Download subtitles (OpenSubtitles) | Yes | Direct OpenSubtitles search with file-hash matching, plus your server's subtitle search. Needs a free OpenSubtitles API key |
+| Ratings (IMDb, Rotten Tomatoes, Metacritic, Letterboxd) | Yes | Metacritic user score and Letterboxd are read from their web pages (no API) |
+| Artwork from TMDB | Yes | Needs a free TMDB key |
+| Per-title memory (position, audio, subtitle) | Yes | Stored on the TV and in Plex |
+| Cast & crew with filmographies | Yes | Limited to your libraries, like Infuse |
 | Multiple versions, Plex Home users, watched sync | Yes | |
 | HDR10+ / HDR10 / HLG, native frame rate | Yes | The TV decodes the file itself, so HDR and frame rate always match the source |
 | Aspect / zoom modes | Partly | Letterbox, auto and stretch. AVPlay has no crop-zoom mode |
@@ -154,16 +181,22 @@ Keyboard controls in the browser:
 | `app/js/player.js` | AVPlay engine (HTML5 fallback), track mapping, seeking and scrubbing, the overlay and its panel, Skip Intro, Up Next, auto-retry |
 | `app/js/subs.js` | Parses external SRT/VTT/ASS subtitles and finds the cue for a time |
 | `app/js/bif.js` | Reads Plex preview thumbnail (BIF) files |
+| `app/js/online.js` | TMDB artwork, OpenSubtitles (hash, search, download), ratings from Plex, OMDb, Metacritic and Letterboxd |
+| `app/js/memory.js` | Per-title memory on the TV: position, version, audio track, subtitle |
+| `app/js/keys.example.js` | Template for build-time API keys (`keys.js`) |
 | `app/js/ui.js` | Screens, the tab bar, the top shelf, rows, sheets, and remote-control focus navigation |
 | `app/css/style.css` | The Apple TV-style look and animations |
 | `app/js/main.js` | Key registration and routing |
 | `scripts/build.sh` | Package, sign, install |
 
 ## What has and hasn't been checked
-- Checked: all the JavaScript parses and stays ES5 (Tizen 6.5's browser). In headless Chromium against a mocked Plex server, these flows were run and screenshotted: home top shelf and rows, tab bar, library grid with filters, show page with seasons and episodes, details with badges and plan line, Audio & Subtitles sheet, cast → filmography, search, settings, Plex Home user switch with PIN pad, playback with the overlay, scrubbing with BIF thumbnails, every panel tab, external subtitles, Skip Intro (jumped to the marker end) and Up Next (played the next episode).
+- Checked: all the JavaScript parses and stays ES5 (Tizen 6.5's browser). In headless Chromium against a mocked Plex server, these flows were run and screenshotted: home top shelf and rows, tab bar, library grid with filters, show page with seasons and episodes, details with badges and plan line, Audio & Subtitles sheet, cast & crew → person page (actor, director, writer across movies and shows), ratings chips, TMDB logo, search, settings, Plex Home user switch with PIN pad, playback with the overlay, scrubbing with BIF thumbnails, every panel tab, external subtitles, Skip Intro (jumped to the marker end) and Up Next (played the next episode). With TMDB, OMDb, Metacritic, Letterboxd and OpenSubtitles replaced by fake responses: OpenSubtitles search sent the file hash, the download showed on screen, stopping saved the position and subtitle, and replaying resumed at the saved point with the downloaded subtitle back on.
 - **Not yet checked on a real TV.** Things that need a first run on the QN900B:
   1. That AVPlay lists audio tracks in the same order as Plex. The app relies on this to switch tracks inside a file.
   2. That the audio-only transcode URL is accepted by your server version.
   3. What the Q990C actually receives for TrueHD.
   4. Animation smoothness on the TV's GPU (all motion is transforms and opacity; if anything stutters, it is most likely the backdrop cross-fade).
   5. The server subtitle search/save calls (`/library/metadata/{id}/subtitles`), and `setSubtitlePosition` for embedded subtitle delay.
+  6. The real TMDB, OMDb and OpenSubtitles services (built to their documented APIs, but only run against fakes here).
+  7. The Metacritic user score and Letterboxd readers. They were written against those sites' page markup but couldn't be run against the live sites from here, so they may need adjusting after a first run.
+  8. That the Plex server answers byte-range requests from the TV for the OpenSubtitles hash (it should; Plex supports ranges for direct play).

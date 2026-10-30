@@ -155,23 +155,36 @@ var Plex = (function () {
         opts = opts || {};
         return api('/library/sections/' + id + '/all', {
             'X-Plex-Container-Start': opts.start || 0, 'X-Plex-Container-Size': opts.size || 500,
-            sort: opts.sort || 'titleSort', unwatched: opts.unwatched ? 1 : null, genre: opts.genre || null, actor: opts.actor || null
+            sort: opts.sort || 'titleSort', unwatched: opts.unwatched ? 1 : null, genre: opts.genre || null,
+            actor: opts.actor || null, director: opts.director || null, writer: opts.writer || null, producer: opts.producer || null,
+            includeGuids: 1
         });
     }
     function recentlyAdded(id, size) {
-        return api('/library/sections/' + id + '/recentlyAdded', { 'X-Plex-Container-Start': 0, 'X-Plex-Container-Size': size || 20 }).then(list);
+        return api('/library/sections/' + id + '/recentlyAdded', { 'X-Plex-Container-Start': 0, 'X-Plex-Container-Size': size || 20, includeGuids: 1 }).then(list);
     }
     function genres(id) { return api('/library/sections/' + id + '/genre').then(function (mc) { return mc.Directory || []; }); }
     function collections(id) { return api('/library/sections/' + id + '/collections').then(list); }
-    function onDeck() { return api('/library/onDeck').then(list); }
+    function onDeck() { return api('/library/onDeck', { includeGuids: 1 }).then(list); }
     // Chapters, intro/credits markers, extras (trailers) and the show's next-up episode come back in one call.
     function metadata(ratingKey) {
         return api('/library/metadata/' + ratingKey, {
-            includeChapters: 1, includeMarkers: 1, includeExtras: 1, includeOnDeck: 1
+            includeChapters: 1, includeMarkers: 1, includeExtras: 1, includeOnDeck: 1, includeGuids: 1
         }).then(function (mc) { return (mc.Metadata || [])[0]; });
     }
     function children(ratingKey) { return api('/library/metadata/' + ratingKey + '/children').then(list); }
     function similar(ratingKey) { return api('/library/metadata/' + ratingKey + '/similar', { count: 20 }).then(list).catch(function () { return []; }); }
+    // Every movie and show in the movie and TV libraries that this person is credited on.
+    // kind: 'actor' | 'director' | 'writer' | 'producer'
+    function personItems(kind, tagId) {
+        return sections().then(function (secs) {
+            return Promise.all(secs.filter(function (s) { return s.type === 'movie' || s.type === 'show'; }).map(function (s) {
+                var o = { sort: 'originallyAvailableAt:desc', size: 300 };
+                o[kind] = tagId;
+                return sectionItems(s.key, o).then(function (mc) { return mc.Metadata || []; }, function () { return []; });
+            }));
+        }).then(function (lists) { return [].concat.apply([], lists); });
+    }
     function collectionItems(ratingKey) { return api('/library/collections/' + ratingKey + '/children').then(list); }
 
     function search(query) {
@@ -311,7 +324,7 @@ var Plex = (function () {
         homeUsers: homeUsers, switchUser: switchUser,
         listServers: listServers, connect: connect,
         sections: sections, sectionItems: sectionItems, recentlyAdded: recentlyAdded, genres: genres, collections: collections,
-        onDeck: onDeck, metadata: metadata, children: children, similar: similar, collectionItems: collectionItems,
+        onDeck: onDeck, metadata: metadata, personItems: personItems, children: children, similar: similar, collectionItems: collectionItems,
         search: search, markWatched: markWatched, nextEpisode: nextEpisode,
         imageUrl: imageUrl, clearLogo: clearLogo,
         previewIndex: previewIndex, subtitleText: subtitleText, searchSubtitles: searchSubtitles, saveSubtitle: saveSubtitle,

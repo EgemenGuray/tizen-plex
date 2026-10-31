@@ -43,6 +43,25 @@
 
     <div id="toast" class="hidden"></div>
 
+    <script>
+        /* Desktop browser only: scale the fixed 1920x1080 page to fit the window. The TV never runs this. */
+        (function () {
+            if (window.tizen) return;
+            var html = document.documentElement, body = document.body;
+            html.style.cssText = 'width:100vw;height:100vh;overflow:hidden;background:#000';
+            body.style.position = 'absolute';
+            body.style.transformOrigin = '0 0';
+            function fit() {
+                var s = Math.min(innerWidth / 1920, innerHeight / 1080);
+                body.style.left = (innerWidth - 1920 * s) / 2 + 'px';
+                body.style.top = (innerHeight - 1080 * s) / 2 + 'px';
+                body.style.transform = 'scale(' + s + ')';
+            }
+            addEventListener('resize', fit);
+            fit();
+        })();
+    </script>
+    <script src="js/vendor/qrcode.min.js"></script>
     <script src="js/util.js"></script>
     <script src="js/plex.js"></script>
     <!-- Optional API keys (TMDB, OMDb, OpenSubtitles). Copy keys.example.js to keys.js; it is not committed. -->

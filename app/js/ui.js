@@ -499,19 +499,38 @@ var UI = (function () {
     function signInScreen(page) {
         clearInterval(pinPoll);
         backdrop(null, 'plain');
-        return Plex.createPin().then(function (pin) {
+        // Two PINs: the short code for plex.tv/link, and a strong one behind the QR code. Whichever is approved first wins.
+        return Promise.all([Plex.createPin(false), Plex.createPin(true).catch(function () { return null; })]).then(function (pins) {
+            var pin = pins[0], strong = pins[1];
             page.className = 'page center-box';
             page.appendChild(el('div', 'wordmark', 'Plex <b>HDR</b>'));
-            page.appendChild(el('p', 'lead', 'On your phone or computer, go to <b>plex.tv/link</b> and enter'));
-            page.appendChild(el('div', 'pin', Util.esc(pin.code)));
-            page.appendChild(el('p', 'muted', 'This screen moves on by itself once the code is accepted.'));
+            var row = el('div', 'signin-row');
+            var codeCol = el('div', 'signin-col');
+            codeCol.appendChild(el('p', 'lead', 'On your phone or computer, go to <b>plex.tv/link</b> and enter'));
+            codeCol.appendChild(el('div', 'pin', Util.esc(pin.code)));
+            row.appendChild(codeCol);
+            if (strong && window.qrcode) {
+                var qr = qrcode(0, 'M');
+                qr.addData(Plex.authUrl(strong.code));
+                qr.make();
+                var qrCol = el('div', 'signin-col');
+                qrCol.appendChild(el('p', 'lead', 'Or scan with your phone'));
+                qrCol.appendChild(el('div', 'qr', qr.createSvgTag({ cellSize: 8, margin: 32, scalable: true })));
+                row.appendChild(el('div', 'signin-or', 'or'));
+                row.appendChild(qrCol);
+            }
+            page.appendChild(row);
+            page.appendChild(el('p', 'muted', 'This screen moves on by itself once you sign in.'));
             var bl = el('div', 'hlist btn-row');
             bl.appendChild(button('New Code', function () { replace(signInScreen); }));
             page.appendChild(bl);
+            var ids = [pin.id].concat(strong ? [strong.id] : []);
             pinPoll = setInterval(function () {
-                Plex.checkPin(pin.id).then(function (token) {
-                    if (token) { clearInterval(pinPoll); Plex.account().catch(function () {}); replace(serversScreen); }
-                }).catch(function () {});
+                ids.forEach(function (id) {
+                    Plex.checkPin(id).then(function (token) {
+                        if (token && pinPoll) { clearInterval(pinPoll); pinPoll = null; Plex.account().catch(function () {}); replace(serversScreen); }
+                    }).catch(function () {});
+                });
             }, 2000);
         });
     }
@@ -567,17 +586,41 @@ var UI = (function () {
 
     /* ---------- ratings and internet artwork ---------- */
 
+    /* Rating chips: a logo drawn in SVG (no image files to ship) followed by the number.
+     * Tomatometer and RT Audience change logo with the score, like Rotten Tomatoes does (fresh/rotten, upright/spilled);
+     * Metacritic shows the critics' Metascore in a square and the user score in a circle, coloured by score. */
+    var ICONS = {
+        imdb: '<span class="logo-imdb">IMDb</span>',
+        letterboxd: '<svg viewBox="0 0 42 16"><circle cx="8" cy="8" r="7" fill="#ff8000"/><circle cx="21" cy="8" r="7" fill="#00e054"/>' +
+            '<circle cx="34" cy="8" r="7" fill="#40bcf4"/></svg>',
+        fresh: '<svg viewBox="0 0 32 32"><circle cx="16" cy="18" r="12" fill="#fa320a"/><ellipse cx="12" cy="14" rx="4" ry="2.5" fill="#ff7a5c" opacity=".7"/>' +
+            '<path d="M16 9l-3-4 2 .5L13 2l3.5 3L19 2l-1 3.5 4-1-4 3.5z" fill="#00912d"/></svg>',
+        rotten: '<svg viewBox="0 0 32 32"><path d="M16 4l3 6 6-3-2 7 7 2-6 4 4 6-7-1-1 7-4-5-5 5-1-7-7 1 4-6-6-4 7-2-2-7 6 3z" fill="#0ac855"/></svg>',
+        upright: '<svg viewBox="0 0 32 32"><circle cx="10" cy="9" r="5" fill="#ffd36b"/><circle cx="16" cy="6" r="5" fill="#ffe08a"/><circle cx="22" cy="9" r="5" fill="#ffd36b"/>' +
+            '<path d="M5 12h22l-3 18H8z" fill="#fff"/><path d="M8.5 12h3l1 18h-2.5zM15 12h2v18h-2zM20.5 12h3l-2 18H19z" fill="#fa320a"/></svg>',
+        spilled: '<svg viewBox="0 0 32 32"><g transform="rotate(-62 16 18)"><path d="M6 10h20l-3 18H9z" fill="#0ac855"/><path d="M9.5 10h3l1 18H11zM16 10h2v18h-2z" fill="#078a3a"/></g>' +
+            '<circle cx="25" cy="27" r="3.5" fill="#ffe08a"/><circle cx="29" cy="23" r="2.5" fill="#ffd36b"/></svg>',
+        metacritic: '<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="15" fill="#000" stroke="#ffbd3f" stroke-width="2"/>' +
+            '<path d="M9 22l3.5-11 3.5 6 3.5-6L23 22h-3l-1.7-5.5L16 21l-2.3-4.5L12 22z" fill="#fff"/></svg>'
+    };
+    function tier(v, good, mid) { return v >= good ? 'good' : v >= mid ? 'mid' : 'low'; }
     var SCORES = [
-        ['imdb', 'IMDb', 's-imdb'], ['rtCritic', 'Tomatometer', 's-rt'], ['rtAudience', 'RT Audience', 's-rta'],
-        ['metaCritic', 'Metascore', 's-mc'], ['metaUser', 'Metacritic Users', 's-mu'], ['letterboxd', 'Letterboxd', 's-lb']
+        { key: 'imdb', name: 'IMDb', icon: function () { return ICONS.imdb; } },
+        { key: 'letterboxd', name: 'Letterboxd', icon: function () { return ICONS.letterboxd; } },
+        { key: 'rtCritic', name: 'Tomatometer', icon: function (v) { return parseInt(v, 10) >= 60 ? ICONS.fresh : ICONS.rotten; } },
+        { key: 'rtAudience', name: 'RT Audience', icon: function (v) { return parseInt(v, 10) >= 60 ? ICONS.upright : ICONS.spilled; } },
+        { key: 'metaUser', name: 'Metacritic', icon: function () { return ICONS.metacritic; },
+            value: function (v) { return '<span class="mc-circle ' + tier(+v, 6.1, 4) + '">' + Util.esc(v) + '</span>'; } },
+        { key: 'metaCritic', name: 'Metascore', icon: function () { return ICONS.metacritic; },
+            value: function (v) { return '<span class="mc-square ' + tier(+v, 61, 40) + '">' + Util.esc(v) + '</span>'; } }
     ];
     function ratingsHtml(r) {
         if (!r) return '';
-        return SCORES.filter(function (x) { return r[x[0]]; }).map(function (x) {
-            var cls = x[2];
-            if (x[0] === 'metaCritic') cls += +r.metaCritic >= 61 ? ' good' : +r.metaCritic >= 40 ? ' mid' : ' low';
-            if (x[0] === 'metaUser') cls += +r.metaUser >= 6.1 ? ' good' : +r.metaUser >= 4 ? ' mid' : ' low';
-            return '<span class="score ' + cls + '"><b>' + x[1] + '</b>' + Util.esc(r[x[0]]) + '</span>';
+        return SCORES.filter(function (x) { return r[x.key]; }).map(function (x) {
+            var v = r[x.key];
+            return '<span class="score s-' + x.key + '"><i class="score-logo">' + x.icon(v) + '</i>' +
+                (x.value ? x.value(v) : '<span class="score-num">' + Util.esc(v) + '</span>') +
+                '<span class="score-name">' + x.name + '</span></span>';
         }).join('');
     }
     function fillRatings(container, item) {
@@ -691,7 +734,7 @@ var UI = (function () {
     var libState = {};
 
     function libraryScreen(page, sec, isTab) {
-        var st = libState[sec.key] || (libState[sec.key] = { sort: 'titleSort', unwatched: false, genre: null, genreTitle: 'All Genres', view: 'all' });
+        var st = libState[sec.key] || (libState[sec.key] = { sort: sec.type === 'movie' ? 'originallyAvailableAt:desc' : 'titleSort', unwatched: false, genre: null, genreTitle: 'All Genres', view: 'all' });
         backdrop(null, 'plain');
         return ensureLibs().then(function () {
             if (isTab) page.appendChild(nav('lib' + sec.key));

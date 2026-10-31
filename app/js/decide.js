@@ -3,7 +3,8 @@
  * Hard facts this encodes (Samsung 2022 Neo QLED, e.g. QN900B, Tizen 6.5):
  *  - HDR10 / HDR10+ / HLG in HEVC (and AV1/VP9) are decoded in hardware; HDR10+ dynamic metadata rides in the
  *    HEVC bitstream, so it survives as long as the video is NOT re-encoded (direct play, or direct stream copy).
- *  - Dolby Vision is not supported by any Samsung TV. Profile 7/8 files play their HDR10 base layer.
+ *  - Dolby Vision is not supported by any Samsung TV. Profile 7/8 files play their HDR10 base layer, and if the
+ *    file also carries HDR10+ metadata (many recent releases do) the TV plays it as HDR10+.
  *    Profile 5 has no HDR10 base layer: it plays with wrong (green/purple) colours.
  *  - DTS (any flavour) cannot be decoded or passed through by 2018+ Samsung TVs.
  *  - Dolby TrueHD from an internal app is handed to the TV's audio pipeline; whether it leaves over eARC as
@@ -35,7 +36,7 @@ var Decide = (function () {
         if (!v) return 'unknown';
         var t = (v.extendedDisplayTitle || '') + ' ' + (v.displayTitle || '');
         if (/HDR10\+/i.test(t)) return 'HDR10+';
-        if (v.DOVIPresent) return 'Dolby Vision P' + (v.DOVIProfile || '?') + (v.DOVIBLCompatID ? ' (HDR10 base)' : '');
+        if (v.DOVIPresent) return 'Dolby Vision P' + (v.DOVIProfile || '?') + (v.DOVIBLCompatID ? ' (HDR10 base, HDR10+ if the file carries it)' : '');
         if (v.colorTrc === 'smpte2084') return 'HDR10 (HDR10+ if the file carries it)';
         if (v.colorTrc === 'arib-std-b67') return 'HLG';
         return 'SDR';
@@ -106,12 +107,13 @@ var Decide = (function () {
     // Apple TV-style badges for the details page.
     function badges(plan) {
         var out = [], m = plan.media || {}, v = plan.video, a = plan.audio;
-        if (m.videoResolution === '4k' || (m.width || 0) >= 3800) out.push('4K');
+        if (m.videoResolution === '8k' || (m.width || 0) >= 7600) out.push('8K');
+        else if (m.videoResolution === '4k' || (m.width || 0) >= 3800) out.push('4K');
         else if (/1080|720/.test(m.videoResolution || '')) out.push('HD');
         if (v) {
             var h = hdrLabel(v);
             if (/^HDR10\+/.test(h)) out.push('HDR10+');
-            else if (v.DOVIPresent) out.push(v.DOVIProfile === 5 ? 'DV P5 · wrong colours' : 'HDR10 (DV base layer)');
+            else if (v.DOVIPresent) out.push(v.DOVIProfile === 5 ? 'DV P5 · wrong colours' : 'HDR10 / HDR10+');
             else if (/^HDR10/.test(h)) out.push('HDR10');
             else if (h === 'HLG') out.push('HLG');
         }
@@ -142,7 +144,8 @@ var Decide = (function () {
         }
         if (video && video.DOVIPresent) {
             if (video.DOVIProfile === 5) warnings.push('Dolby Vision profile 5 has no HDR10 layer; colours will be wrong on a Samsung TV. Use a different version of this film.');
-            else warnings.push('Dolby Vision is not supported by Samsung; the TV plays the HDR10 base layer.');
+            else if (/^HDR10\+/.test(hdrLabel(video))) warnings.push('Dolby Vision is not supported by Samsung; the TV plays this file as HDR10+.');
+            else warnings.push('Dolby Vision is not supported by Samsung; the TV plays it as HDR10+ if the file carries HDR10+ metadata, otherwise as HDR10.');
         }
 
         var audio = chooseAudio(part, audioId, settings);

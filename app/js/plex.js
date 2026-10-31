@@ -57,8 +57,13 @@ var Plex = (function () {
 
     /* ---------- sign-in (plex.tv/link) ---------- */
 
-    function createPin() {
-        return request('POST', 'https://plex.tv/api/v2/pins?strong=false');
+    function createPin(strong) {
+        return request('POST', 'https://plex.tv/api/v2/pins?strong=' + (strong ? 'true' : 'false'));
+    }
+
+    // Plex's own sign-in page for a strong PIN: scanning it on a phone signs this TV in without typing a code.
+    function authUrl(code) {
+        return 'https://app.plex.tv/auth#?' + Util.qs({ clientID: clientId, code: code, 'context[device][product]': PRODUCT });
     }
 
     function checkPin(id) {
@@ -292,8 +297,10 @@ var Plex = (function () {
         p.directStream = 1;
         p.directStreamAudio = 0;
         p.videoQuality = 100;
-        p.maxVideoBitrate = 200000;
-        p.videoResolution = '3840x2160';
+        p.maxVideoBitrate = 400000;
+        // The source resolution, so the server never scales the copied video down (an 8K file must stay 8K).
+        var media = (item.Media || [])[mediaIndex || 0] || {};
+        p.videoResolution = media.width && media.height ? media.width + 'x' + media.height : '7680x4320';
         p.offset = Math.floor((offsetMs || 0) / 1000);
         p.session = sessionId;
         return state.server.uri + '/video/:/transcode/universal/start.m3u8?' + Util.qs(p);
@@ -320,7 +327,7 @@ var Plex = (function () {
 
     return {
         state: state,
-        createPin: createPin, checkPin: checkPin, signOut: signOut, account: account,
+        createPin: createPin, authUrl: authUrl, checkPin: checkPin, signOut: signOut, account: account,
         homeUsers: homeUsers, switchUser: switchUser,
         listServers: listServers, connect: connect,
         sections: sections, sectionItems: sectionItems, recentlyAdded: recentlyAdded, genres: genres, collections: collections,

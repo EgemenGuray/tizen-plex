@@ -41,6 +41,28 @@ var Util = (function () {
         return (h ? h + ':' + (m < 10 ? '0' : '') : '') + m + ':' + (sec < 10 ? '0' : '') + sec;
     }
 
+    // "2 hr 15 min", "48 min"
+    function fmtDuration(ms) {
+        var m = Math.round((ms || 0) / 60000);
+        if (!m) return '';
+        var h = Math.floor(m / 60);
+        return ((h ? h + ' hr ' : '') + (m % 60 ? m % 60 + ' min' : '')).trim();
+    }
+
+    function fmtClock(date) {
+        var h = date.getHours(), m = date.getMinutes();
+        return h + ':' + (m < 10 ? '0' : '') + m;
+    }
+
+    function debounce(fn, ms) {
+        var t = null;
+        return function () {
+            var args = arguments, self = this;
+            clearTimeout(t);
+            t = setTimeout(function () { fn.apply(self, args); }, ms);
+        };
+    }
+
     var toastTimer = null;
     function toast(msg, ms) {
         var el = document.getElementById('toast');
@@ -50,5 +72,8 @@ var Util = (function () {
         toastTimer = setTimeout(function () { el.classList.add('hidden'); }, ms || 5000);
     }
 
-    return { store: store, uuid: uuid, qs: qs, esc: esc, fmtTime: fmtTime, toast: toast };
+    return {
+        store: store, uuid: uuid, qs: qs, esc: esc, fmtTime: fmtTime, fmtDuration: fmtDuration,
+        fmtClock: fmtClock, debounce: debounce, toast: toast
+    };
 })();

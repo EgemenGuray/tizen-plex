@@ -18,13 +18,19 @@ var Player = (function () {
 
     var AvplayEngine = {
         name: 'AVPlay',
-        open: function (url, cb) {
+        // media: the Plex Media element being played (for its resolution).
+        open: function (url, cb, media) {
             var av = webapis.avplay;
+            var width = (media && media.width) || 0;
             try { av.stop(); av.close(); } catch (e) {}
             av.open(url);
             av.setDisplayRect(0, 0, 1920, 1080);
-            if (/\.m3u8/.test(url)) {
+            // Without these AVPlay sets its decoder up for HD (or caps UHD at 4K), so 8K files would come out at 4K.
+            if (width >= 3800 || /\.m3u8/.test(url)) {
                 try { av.setStreamingProperty('SET_MODE_4K', 'TRUE'); } catch (e) {}
+            }
+            if (width >= 7600) {
+                try { av.setStreamingProperty('ADAPTIVE_INFO', 'FIXED_MAX_RESOLUTION=7680x4320'); } catch (e) {}
             }
             av.setListener({
                 onbufferingstart: function () { cb.buffering(true); },
@@ -163,7 +169,7 @@ var Player = (function () {
             ended: function () { if (live()) ended(); },
             error: function (e) { if (live()) fail('Playback error: ' + e); },
             subtitle: function (text, duration) { if (live()) embeddedSubtitle(text, duration); }
-        });
+        }, p.media);
         engine.prepare(function () {
             if (!live()) return;
             s.prepared = true;
@@ -198,7 +204,15 @@ var Player = (function () {
 
     function fail(msg) {
         if (!s) return;
-        // Direct play failed: most often an audio format the TV rejects. Retry once with the audio converted.
+        // Direct play failed. A first failure is often transient (the server was slow to answer for a large remux), so try
+        // direct play once more: converting the audio would lose Atmos. Only after that, retry with the audio converted.
+        if (s.mode === 'direct' && !s.directRetried) {
+            s.directRetried = true;
+            Util.toast(msg + '. Trying again…', 4000);
+            engine.close();
+            setTimeout(function () { if (s) load(s.lastTime); }, 1500);
+            return;
+        }
         if (s.mode === 'direct' && !s.retried) {
             s.retried = true;
             s.mode = 'audio-transcode';

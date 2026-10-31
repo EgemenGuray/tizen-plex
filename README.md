@@ -10,7 +10,7 @@ It is a sideloaded Tizen web app. It plays through Samsung's AVPlay API, the sam
 |---|---|---|
 | **HDR10+ video** | **Yes** | HDR10+ metadata is carried inside the HEVC stream. AVPlay passes the stream to the TV's hardware decoder, which reads the metadata. It only survives if the server doesn't re-encode the video, so this app never asks for a video transcode. |
 | HDR10 / HLG | Yes | Same path. |
-| **Dolby Vision** | **No** | No Samsung TV supports Dolby Vision. Profile 7 and 8 files play their HDR10 base layer and look correct. Profile 5 files have no HDR10 layer, so the colours come out wrong. The app warns you about those. |
+| **Dolby Vision** | **No** | No Samsung TV supports Dolby Vision. Profile 7 and 8 files play their HDR10 base layer and look correct, and when the file also carries HDR10+ metadata (many recent releases do) the TV plays it as HDR10+. Profile 5 files have no HDR10 layer, so the colours come out wrong. The app warns you about those. |
 | **Dolby Atmos via E-AC3 (DD+ Atmos)** | **Yes, reliably** | The TV passes E-AC3 Atmos to the soundbar over eARC. This is the format streaming services use. |
 | **Dolby TrueHD / TrueHD Atmos** | **Can't be guaranteed: the TV firmware decides** | An app can hand TrueHD to the TV, but the TV firmware decides what leaves the eARC port. User reports for 2021–2022 Samsung TVs, including a QN900B, say TrueHD from built-in apps doesn't arrive as a bitstream: you get silence, PCM, or a forced transcode ([Plex forum](https://forums.plex.tv/t/still-no-dolby-atmos-on-samsung-tv/825774), [another thread](https://forums.plex.tv/t/cannot-stream-truehd-to-samsung-tv/547058)). No app API can override this. The app tries it and gives you a one-button fallback. |
 | DTS / DTS-HD / DTS:X | **No** | Samsung TVs from 2018 on can't decode DTS or pass it through. The app picks another track in the same language, or has the server convert the audio. |
@@ -33,7 +33,7 @@ It is a sideloaded Tizen web app. It plays through Samsung's AVPlay API, the sam
 - **Settings**: Plex Home user switching (with PIN pad), server, TrueHD mode, preferred audio language, subtitle mode/language/size/colour/style/position, autoplay next episode, auto-skip intros, picture size, sound setup help and a remote-control cheat sheet.
 
 ### Playback rules (unchanged)
-- Signs in with a PIN at plex.tv/link, finds your servers, and prefers a local connection over Plex Relay.
+- Signs in with a PIN at plex.tv/link or by scanning a QR code with a phone, finds your servers, and prefers a local connection over Plex Relay.
 - **Video is never transcoded**, so HDR10+ survives. The only server work ever requested is audio conversion with the video copied untouched.
 - **TrueHD handling** (Settings, default *Auto*):
   - *Auto*: if the file also has an E-AC3 or AC3 track in the same language (often E-AC3 Atmos on remuxes from streaming sources), use that. Otherwise send TrueHD as-is.

@@ -77,7 +77,7 @@ var Decide = (function () {
                 var altT = sameLangAlt(function (s) { return s.codec === 'eac3' || s.codec === 'ac3'; });
                 if (altT) return { stream: altT, transcode: false, reason: 'Using ' + audioLabel(altT) + ' instead of TrueHD; it passes through to the soundbar reliably.' };
             }
-            return { stream: chosen, transcode: false, reason: 'Sending TrueHD as-is. Whether it reaches the Q990C as Atmos is up to the TV firmware. If you hear nothing or the soundbar shows PCM, press Yellow.' };
+            return { stream: chosen, transcode: false, reason: 'Sending TrueHD as-is. This TV decodes TrueHD itself, so the soundbar gets lossless multichannel PCM without the Atmos height channels. Press Yellow only if there is no sound (converting gives lossy E-AC3 5.1).' };
         }
 
         if (SAFE_AUDIO.indexOf(chosen.codec) < 0) {

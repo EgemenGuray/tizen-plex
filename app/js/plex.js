@@ -2,7 +2,7 @@
 var Plex = (function () {
     'use strict';
 
-    var PRODUCT = 'Plex HDR (Tizen)';
+    var PRODUCT = 'Lumen (Tizen)';
     var VERSION = '0.2.0';
 
     var clientId = Util.store('clientId');

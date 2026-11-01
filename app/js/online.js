@@ -7,7 +7,7 @@ var Online = (function () {
     var TMDB = 'https://api.themoviedb.org/3';
     var TMDB_IMG = 'https://image.tmdb.org/t/p/';
     var OS = 'https://api.opensubtitles.com/api/v1';
-    var APP_UA = 'PlexHDR v0.3';
+    var APP_UA = 'Lumen v0.3';
 
     function keys() {
         var k = Util.store('keys') || {};

@@ -1,4 +1,6 @@
-# Plex HDR for Tizen
+# Lumen for Tizen
+
+> Formerly "Plex HDR". The Tizen app id (`PlxHDRtzn0.PlexHDR`), the certificate profile name `PlexHDR` and the saved settings keys are unchanged, so reinstalling replaces the old app and keeps its sign-in.
 
 A small Plex client for Samsung Tizen TVs, built for a QN900B with a Q990C soundbar. It has one job: send the original file to the TV untouched (direct play), so the TV's own decoders handle HDR10+, and send Dolby audio to the soundbar wherever the TV allows it.
 
@@ -144,7 +146,7 @@ Retail Samsung TVs only install apps signed with a Samsung certificate that name
 cd tizen-plex
 TIZEN_PROFILE=PlexHDR ./scripts/build.sh <TV-IP>
 ```
-This packages `app/` into `PlexHDR.wgt`, signs it with your profile and installs it. **Plex HDR** then appears under Apps on the TV.
+This packages `app/` into `Lumen.wgt`, signs it with your profile and installs it. **Lumen** then appears under Apps on the TV.
 
 If you'd rather use the Tizen Studio GUI, import `app/` as a Tizen web project, then use Run As → Tizen Web Application with the TV selected.
 

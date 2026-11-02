@@ -307,7 +307,7 @@ var UI = (function () {
      * keyboard laid out as a grid for typing with the remote. Shortcuts cover the usual pieces of addresses. */
     var nativeInput = null;
     function textEntry(title, value, cb, note) {
-        var text = value || '', upper = false;
+        var text = value || '';
         var field = document.createElement('input');
         field.type = 'text';
         field.className = 'entry-native';
@@ -320,57 +320,81 @@ var UI = (function () {
         fieldBox.appendChild(el('span', 'entry-hint', 'OK: TV keyboard'));
         fieldBox._select = function () { nativeInput = { field: field, done: function () { text = field.value; draw(); } }; field.focus(); };
         field.addEventListener('input', function () { text = field.value; });
+        /* Like Apple TV: one sliding row of characters (it wraps around at the ends), with the modes,
+         * Space, Delete and Done always one step below it. */
+        var MODES = [
+            ['abc', 'abcdefghijklmnopqrstuvwxyz.@-_/:'],
+            ['ABC', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ.@-_/:'],
+            ['123', '1234567890.:/-_@'],
+            ['#+=', '?=&%+~#!*$,;()[]\'"<>|\\^`{}']
+        ];
+        var mode = 0;
+        var strip = el('div', 'track hlist entry-strip');
+        strip._edge = function (dir) {   // wrap around
+            var ks = strip.querySelectorAll('.key');
+            focus(dir === 'right' ? ks[0] : ks[ks.length - 1]);
+        };
+        function fillStrip() {
+            strip.innerHTML = '';
+            MODES[mode][1].split('').forEach(function (c) {
+                var b = el('div', 'key focusable', c);
+                b._select = function () { type(c); };
+                strip.appendChild(b);
+            });
+            strip._x = 0;
+            strip.style.transform = '';
+            Array.prototype.forEach.call(kb.querySelectorAll('.k-mode'), function (m, i) { m.classList.toggle('on', i === mode); });
+        }
+        function type(t) { text += t; draw(); }
         function draw() {
             if (field.value !== text) field.value = text;
             // Keep the end of long addresses in view.
             field.scrollLeft = field.scrollWidth;
-            Array.prototype.forEach.call(kb.querySelectorAll('[data-c]'), function (k) {
-                k.textContent = upper ? k.getAttribute('data-c').toUpperCase() : k.getAttribute('data-c');
-            });
-            var sh = kb.querySelector('.k-shift');
-            if (sh) sh.classList.toggle('on', upper);
         }
         function done() { nativeInput = null; closeSheet(); cb(text); }
-        var kb = el('div', 'entry-grid');
-        var rows = [
-            '1234567890'.split(''),
-            'qwertyuiop'.split(''),
-            'asdfghjkl@'.split(''),
-            'zxcvbnm.:/'.split(''),
-            '-_?=&%+~#!'.split('')
-        ];
-        rows.forEach(function (r) {
-            var row = el('div', 'entry-row');
-            r.forEach(function (c) {
-                var b = el('div', 'key focusable', c);
-                b.setAttribute('data-c', c);
-                b._select = function () { text += upper ? c.toUpperCase() : c; draw(); };
-                row.appendChild(b);
-            });
-            kb.appendChild(row);
+        var kb = el('div', 'entry-kb');
+        var stripView = el('div', 'entry-stripview');
+        stripView.appendChild(strip);
+        kb.appendChild(stripView);
+        var actions = el('div', 'entry-row hlist');
+        MODES.forEach(function (m, i) {
+            var b = el('div', 'key wide k-mode focusable', m[0]);
+            b._select = function () { mode = i; fillStrip(); };
+            actions.appendChild(b);
         });
-        var actions = el('div', 'entry-row');
-        [['⇧ Shift', function () { upper = !upper; }, 'k-shift'], ['Space', function () { text += ' '; }],
-         ['⌫ Delete', function () { text = text.slice(0, -1); }], ['Clear', function () { text = ''; }],
+        [['Space', function () { type(' '); }],
+         ['⌫ Delete', function () { text = text.slice(0, -1); draw(); }, 'k-del'],
+         ['Clear', function () { text = ''; draw(); }],
          ['Done', done, 'k-done']].forEach(function (a) {
             var b = el('div', 'key wide focusable ' + (a[2] || ''), a[0]);
-            b._select = function () { a[1](); if (a[1] !== done) draw(); };
+            b._select = a[1];
             actions.appendChild(b);
         });
         kb.appendChild(actions);
-        var snips = el('div', 'entry-row');
-        ['http://', 'https://', '.com', '.net', ':8080', '.m3u', 'www.'].forEach(function (t) {
+        var snips = el('div', 'entry-row hlist');
+        ['http://', 'https://', 'www.', '.com', '.net', '.org', ':8080', '.m3u', '.m3u8'].forEach(function (t) {
             var b = el('div', 'key wide snip focusable', t);
-            b._select = function () { text += t; draw(); };
+            b._select = function () { type(t); };
             snips.appendChild(b);
         });
         kb.appendChild(snips);
+        fillStrip();
         var foot = el('div', 'entry-wrap');
         foot.appendChild(fieldBox);
         foot.appendChild(kb);
-        openSheet(title, [], { footer: foot, wide: true, note: note, onClose: function () { nativeInput = null; } });
+        entry = { type: type, del: function () { text = text.slice(0, -1); draw(); }, done: done };
+        openSheet(title, [], { footer: foot, wide: true, note: note, onClose: function () { nativeInput = null; entry = null; } });
         draw();
-        focus(kb.querySelector('.key'));
+        focus(strip.querySelector('.key'));
+    }
+
+    /* Remote keys while the keyboard is open: number keys type digits. */
+    var entry = null;
+    function entryKey(key) {
+        if (!entry || !sheet) return false;
+        var m = /^d(\d)$/.exec(key);
+        if (m) { entry.type(m[1]); return true; }
+        return false;
     }
 
     /* Keys while the TV keyboard is open: Done (or Enter) keeps the text, Cancel or Back leaves the field.
@@ -1166,15 +1190,12 @@ var UI = (function () {
                     searchState.results = res; drawResults();
                 }).catch(function (e) { Util.toast(e.message); });
             }, 450);
-            'abcdefghijklmnopqrstuvwxyz1234567890'.split('').concat(['space', '⌫', 'clear']).forEach(function (k) {
-                var b = el('div', 'key focusable' + (k.length > 1 ? ' wide' : ''), k === 'space' ? 'Space' : k === 'clear' ? 'Clear' : k);
-                b._select = function () {
-                    if (k === 'space') searchState.q += ' ';
-                    else if (k === '⌫') searchState.q = searchState.q.slice(0, -1);
-                    else if (k === 'clear') searchState.q = '';
-                    else searchState.q += k;
-                    drawQ(); run();
-                };
+            // The same keyboard as everywhere else; the results follow what was typed.
+            [['⌕  Type to search', function () {
+                textEntry('Search Plex', searchState.q, function (t) { searchState.q = t; drawQ(); run(); });
+            }], ['Clear', function () { searchState.q = ''; drawQ(); run(); }]].forEach(function (k) {
+                var b = el('div', 'key wide focusable', k[0]);
+                b._select = k[1];
                 keys.appendChild(b);
             });
             keys.firstChild.setAttribute('data-autofocus', '');
@@ -1334,7 +1355,7 @@ var UI = (function () {
         // Building blocks for the Live TV (IPTV) screens in iptvui.js.
         kit: {
             el: el, button: button, lazyImg: lazyImg, push: push, replace: replace, show: show, nav: nav, focus: focus, refocus: refocus,
-            focused: function () { return focused; }, nativeKey: nativeKey, openSheet: openSheet, closeSheet: closeSheet, choose: choose, textEntry: textEntry,
+            focused: function () { return focused; }, nativeKey: nativeKey, entryKey: entryKey, openSheet: openSheet, closeSheet: closeSheet, choose: choose, textEntry: textEntry,
             pinPad: pinPad, backdrop: backdrop, ensureLibs: ensureLibs, signIn: function () { Util.store('iptv.only', null); replace(signInScreen); }
         }
     };

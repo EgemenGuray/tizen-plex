@@ -28,6 +28,7 @@
         if (Intro.active()) { Intro.skip(); return; }   // any key skips the startup intro
         if (Player.active()) { Player.handleKey(key); return; }
         if (IPTVPlayer.active()) { IPTVPlayer.handleKey(key); return; }
+        if (UI.kit.entryKey(key)) return;   // number keys type in the keyboard
         if (/^d\d$/.test(key)) return;
         if ((key === 'info' || key === 'green') && !UI.sheetOpen() && IPTVUI.options(UI.kit.focused())) return;
         if (key === 'left' || key === 'right' || key === 'up' || key === 'down') UI.move(key);

@@ -481,14 +481,17 @@ body.playing #toast { background: rgba(28,28,32,.88); }
 .entry-field.focused { border-color: #fff; }
 .entry-native { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text); font-size: 34px; font-weight: 600; line-height: 1.2; font-family: inherit; padding: 16px 0; }
 .entry-hint { font-size: 18px; color: var(--text3); margin-left: 16px; white-space: nowrap; }
-.entry-grid { display: flex; flex-direction: column; gap: 10px; align-items: center; }
-.entry-row { display: flex; gap: 10px; justify-content: center; }
-.entry-grid .key { text-transform: none; width: 74px; height: 64px; background: rgba(255,255,255,.07); font-size: 30px; }
-.entry-grid .key.wide { width: auto; min-width: 120px; padding: 0 18px; font-size: 22px; }
-.entry-grid .key.snip { font-size: 20px; min-width: 96px; }
-.entry-grid .key.k-done { background: var(--accent, #e5a00d); color: #000; }
-.entry-grid .key.k-shift.on { background: rgba(255,255,255,.35); }
-.entry-grid .key.focused { transform: scale(1.1); background: #fff; color: #000; }
+.entry-kb { display: flex; flex-direction: column; gap: 14px; align-items: center; }
+.entry-stripview { width: 100%; overflow: hidden; position: relative; border-radius: 14px; background: rgba(255,255,255,.04); }
+.entry-strip.track { gap: 8px; padding: 14px 80px; transition: transform .18s ease-out; }
+.entry-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.entry-kb .key { text-transform: none; width: 66px; height: 66px; background: rgba(255,255,255,.07); font-size: 32px; }
+.entry-kb .key.wide { width: auto; min-width: 100px; padding: 0 18px; font-size: 22px; }
+.entry-kb .key.snip { font-size: 20px; min-width: 90px; height: 54px; }
+.entry-kb .key.k-done { background: var(--accent, #e5a00d); color: #000; min-width: 140px; }
+.entry-kb .key.k-del { min-width: 140px; }
+.entry-kb .key.k-mode.on { background: rgba(255,255,255,.3); }
+.entry-kb .key.focused { transform: scale(1.12); background: #fff; color: #000; }
 
 /* Startup intro: full-screen canvas above everything while it plays. */
 #intro { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; z-index: 9999; background: #000; }

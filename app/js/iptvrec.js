@@ -35,7 +35,7 @@ var IPTVRec = (function () {
         var url = item.url;
         if (kind === 'catchup') {
             url = IPTV.catchupURL(item.channel, item.programme);
-            return add({ kind: 'download', title: item.programme.title, subtitle: item.channel.name, poster: item.channel.logo, url: url,
+            return add({ kind: 'download', title: item.programme.title, subtitle: item.channel.name, poster: item.channel.logo, channelID: item.channel.id, url: url,
                 userAgent: item.channel.userAgent, file: fileName(item.channel.name + ' ' + item.programme.title, 'ts'), start: Date.now(),
                 end: Date.now() + (item.programme.end - item.programme.start) + 600000 });
         }

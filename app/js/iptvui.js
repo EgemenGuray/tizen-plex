@@ -31,6 +31,28 @@ var IPTVUI = (function () {
     }
     function dot(pid) { return IPTV.playlists().length > 1 ? '<i class="sdot" style="background:' + IPTV.color(IPTV.playlist(pid)) + '"></i>' : ''; }
 
+    /* Each section has its own search. It looks through the whole section, not just the open group. */
+    var sq = {};
+    function matcher(sec) {
+        var t = (sq[sec] || '').trim().toLowerCase();
+        if (!t) return null;
+        return function () {
+            for (var i = 0; i < arguments.length; i++) { var v = arguments[i]; if (v && String(v).toLowerCase().indexOf(t) >= 0) return true; }
+            return false;
+        };
+    }
+    function searchBar(row, sec, what) {
+        var b = K().button('⌕ ' + (sq[sec] ? esc(sq[sec]) : 'Search ' + esc(what)), function () {
+            K().textEntry('Search ' + what, sq[sec] || '', function (t) { sq[sec] = t; K().replace(screen, 'iptv'); });
+        }, 'pill search-pill' + (sq[sec] ? ' on' : ''));
+        row.insertBefore(b, row.firstChild);
+        if (sq[sec]) {
+            var x = K().button('✕', function () { sq[sec] = ''; K().replace(screen, 'iptv'); }, 'pill');
+            row.insertBefore(x, b.nextSibling);
+        }
+    }
+    function noMatch(body, sec) { body.appendChild(el('div', 'iptv-empty', '<p>Nothing matches “' + esc(sq[sec]) + '”.</p>')); }
+
     function playLive(ch, lineup) { IPTVPlayer.start({ live: ch }, lineup, function () { K().show(); }); }
 
     /* ---------- frame ---------- */
@@ -62,7 +84,7 @@ var IPTVUI = (function () {
             bar.setAttribute('data-anchor', 'top');
             var tabs = el('div', 'tabs hlist');
             var t1 = el('div', 'tab focusable active', 'Live TV'); t1._select = function () {};
-            var t2 = el('div', 'tab focusable', 'Sign in to Plex'); t2._select = function () { K().signIn(); };
+            var t2 = el('div', 'tab focusable', 'Plex'); t2._select = function () { K().signIn(); };
             tabs.appendChild(t1); tabs.appendChild(t2);
             bar.appendChild(tabs);
             page.appendChild(bar);
@@ -117,7 +139,7 @@ var IPTVUI = (function () {
     function channelCard(ch, lineup) {
         var c = el('div', 'card iptv-chcard focusable');
         var now = IPTV.nowNext(ch)[0];
-        c.innerHTML = '<div class="img logo" style="background-image:url(\'' + esc(ch.logo || '') + '\')">' + (ch.logo ? '' : '<span>' + esc(ch.name.slice(0, 2)) + '</span>') + '</div>' +
+        c.innerHTML = IPTV.logoHtml(ch, 'img chlogo') +
             '<div class="cap"><div class="t">' + esc(ch.name) + ' ' + tagsHtml(ch, true) + '</div><div class="s">' + esc(now ? now.title : '') + '</div></div>';
         c._select = function () { playLive(ch, lineup); };
         c._options = function () { channelOptions(ch); };
@@ -219,6 +241,7 @@ var IPTVUI = (function () {
                 K().replace(screen, 'iptv');
             }, 'pill small' + (tagFilter.indexOf(t) >= 0 ? ' on' : '')));
         });
+        searchBar(tagsRow, 'live', 'channels and what is on');
         body.appendChild(tagsRow);
         var cols = el('div', 'iptv-cols');
         var gcol = column('groups'), ccol = column('channels');
@@ -240,8 +263,9 @@ var IPTVUI = (function () {
             r._options = function () { groupOptions(g); };
             gcol.page.appendChild(r);
         });
-        var list = lineup(liveGroup);
-        if (!list.length) ccol.page.appendChild(el('div', 'muted pad', IPTV.loading() ? 'Loading channels…' : 'No channels here.'));
+        var f = matcher('live'), list = f ? lineup('all').filter(function (c) { var n = IPTV.nowNext(c)[0]; return f(c.name, c.group, n && n.title); }) : lineup(liveGroup);
+        if (f) ccol.page.appendChild(el('div', 'ir-h', list.length + ' channels match “' + esc(sq.live) + '”'));
+        if (!list.length) ccol.page.appendChild(el('div', 'muted pad', IPTV.loading() ? 'Loading channels…' : f ? 'No channel matches.' : 'No channels here.'));
         list.slice(0, MAX_ROWS).forEach(function (ch) { ccol.page.appendChild(channelRow(ch, list, prev)); });
         if (list.length > MAX_ROWS) ccol.page.appendChild(el('div', 'muted pad', (list.length - MAX_ROWS) + ' more: pick a group or search to narrow the list.'));
         cols.appendChild(gcol.col); cols.appendChild(ccol.col); cols.appendChild(prev);
@@ -259,7 +283,7 @@ var IPTVUI = (function () {
         var nn = IPTV.nowNext(ch), now = nn[0];
         var pct = now ? Math.round((Date.now() - now.start) / (now.end - now.start) * 100) : 0;
         var r = el('div', 'ir ch focusable',
-            '<span class="num">' + (ch.number || '') + '</span><span class="logo" style="background-image:url(\'' + esc(ch.logo || '') + '\')"></span>' +
+            '<span class="num">' + (ch.number || '') + '</span>' + IPTV.logoHtml(ch, 'logo') +
             '<span class="lbl">' + dot(ch.playlistID) + esc(ch.name) + ' ' + tagsHtml(ch) + (IPTV.isFavorite(ch.id) ? ' <i class="star">★</i>' : '') +
             (ch.catchup ? ' <i class="cu">⟲</i>' : '') + (IPTVRec.recordingOf(ch) ? ' <i class="rec">●</i>' : '') +
             '<small>' + (now ? esc(now.title) + '<span class="pbar"><i style="width:' + pct + '%"></i></span>' : '') + '</small></span>');
@@ -267,7 +291,7 @@ var IPTVUI = (function () {
         r._options = function () { channelOptions(ch); };
         if (prev) r._focus = function () {
             var info = prev.querySelector('.pv-info');
-            info.innerHTML = '<div class="t">' + esc(ch.name) + ' ' + tagsHtml(ch) + '</div>' +
+            info.innerHTML = IPTV.logoHtml(ch, 'pvlogo') + '<div class="t">' + esc(ch.name) + ' ' + tagsHtml(ch) + '</div>' +
                 (now ? '<div class="p">' + esc(now.title) + '</div><div class="s">' + clock(now.start) + ' – ' + clock(now.end) + '</div>' + (now.desc ? '<div class="d">' + esc(now.desc) + '</div>' : '') : '') +
                 (nn[1] ? '<div class="s">Next ' + clock(nn[1].start) + '  ' + esc(nn[1].title) + '</div>' : '');
             clearTimeout(previewTimer);
@@ -325,6 +349,7 @@ var IPTVUI = (function () {
         head.appendChild(K().button('Now', function () { guideStart = null; K().replace(screen, 'iptv'); }, 'pill'));
         head.appendChild(K().button('Later ▶', function () { shift(1); }, 'pill'));
         head.appendChild(el('div', 'gday', esc(day(guideStart))));
+        searchBar(head, 'guide', 'channels and programmes');
         body.appendChild(head);
         if (!IPTV.hasGuide()) {
             body.appendChild(el('div', 'iptv-empty', '<p>' + (IPTV.guideLoading() ? 'Loading the TV guide…' : 'No TV guide yet. Lumen uses the guide your playlist names; you can add an XMLTV address to the playlist.') + '</p>'));
@@ -342,13 +367,21 @@ var IPTVUI = (function () {
         pg.setAttribute('data-offset', '200');
         var chans = guideGroup === 'all' ? IPTV.channels() : guideGroup === 'favorites' ? IPTV.favoriteChannels() :
             (function () { var g = IPTV.groups('live').filter(function (x) { return x.id === guideGroup; })[0]; return g ? IPTV.inGroup('live', g) : IPTV.channels(); })();
+        var gf = matcher('guide');
+        if (gf) {
+            // Channels whose name matches, or that show a matching programme within a day of the guide's start.
+            chans = IPTV.channels().filter(function (ch) {
+                return gf(ch.name) || IPTV.programmes(ch, guideStart, guideStart + 86400000).some(function (p) { return gf(p.title, p.episode, p.category); });
+            });
+            if (!chans.length) return noMatch(body, 'guide');
+        }
         var now = Date.now();
         if (now > guideStart && now < end) {
             var line = el('div', 'g-now'); line.style.left = (CHW + (now - guideStart) / 3600000 * HOUR) + 'px'; wrap.appendChild(line);
         }
         chans.slice(0, 150).forEach(function (ch) {
             var row = el('div', 'g-row');
-            row.appendChild(el('div', 'g-ch', '<span class="logo" style="background-image:url(\'' + esc(ch.logo || '') + '\')"></span><span>' + esc(ch.name) + '</span>'));
+            row.appendChild(el('div', 'g-ch', IPTV.logoHtml(ch, 'logo') + '<span>' + esc(ch.name) + '</span>'));
             var cells = el('div', 'g-cells hlist');
             var cursor = guideStart, any = false;
             IPTV.programmes(ch, guideStart, end).forEach(function (p) {
@@ -422,16 +455,21 @@ var IPTVUI = (function () {
         head.appendChild(K().button('⇅ ' + sorts.filter(function (x) { return x[0] === st.sort; })[0][1], function () {
             K().choose('Sort', sorts.map(function (x) { return { label: x[1], value: x[0] }; }), st.sort, function (v) { st.sort = v; K().replace(screen, 'iptv'); });
         }, 'pill'));
+        var sec = kind === 'movie' ? 'movies' : 'series';
+        searchBar(head, sec, kind === 'movie' ? 'movies' : 'series');
         body.appendChild(head);
         var all = kind === 'movie' ? IPTV.movies() : IPTV.series();
-        var list = st.group === 'all' ? all : st.group === 'favorites' ? all.filter(function (x) { return IPTV.isFavorite(x.id); }) :
+        var lf = matcher(sec);
+        var list = lf ? all.filter(function (x) { return lf(x.name, x.group, x.year); }) :
+            st.group === 'all' ? all : st.group === 'favorites' ? all.filter(function (x) { return IPTV.isFavorite(x.id); }) :
             (function () { var g = groups.filter(function (x) { return x.id === st.group; })[0]; return g ? IPTV.inGroup(kind, g) : all; })();
+        if (lf && !list.length) return noMatch(body, sec);
         list = list.slice();
         if (st.sort === 'name') list.sort(function (a, b) { return a.name.localeCompare(b.name); });
         else if (st.sort === 'rating') list.sort(function (a, b) { return (b.rating || 0) - (a.rating || 0); });
         else if (st.sort === 'year') list.sort(function (a, b) { return (b.year || 0) - (a.year || 0); });
         else if (kind === 'movie') list.sort(function (a, b) { return (b.added || 0) - (a.added || 0); });
-        if (kind === 'movie' && st.group === 'all') {
+        if (kind === 'movie' && st.group === 'all' && !lf) {
             var resume = IPTV.continueEntries().filter(function (r) { return r.movieID; });
             if (resume.length) body.appendChild(shelf('Continue Watching', null, resume.map(resumeCard)));
         }
@@ -526,15 +564,19 @@ var IPTVUI = (function () {
         [['live', 'Live TV'], ['movies', 'Movies'], ['series', 'Series']].forEach(function (t) {
             row.appendChild(K().button(t[1], function () { favTab = t[0]; K().replace(screen, 'iptv'); }, 'pill' + (favTab === t[0] ? ' on' : '')));
         });
+        searchBar(row, 'favorites', 'favourites');
         body.appendChild(row);
+        var ff = matcher('favorites');
         if (favTab === 'live') {
             var chans = IPTV.favoriteChannels();
+            if (ff) { chans = chans.filter(function (c) { var n = IPTV.nowNext(c)[0]; return ff(c.name, c.group, n && n.title); }); if (!chans.length) return noMatch(body, 'favorites'); }
             if (!chans.length) return body.appendChild(el('div', 'iptv-empty', '<p>No favourite channels yet. Press INFO on a channel and choose Add to Favorites.</p>'));
             var col = column('channels wide');
             chans.forEach(function (c) { col.page.appendChild(channelRow(c, chans, null)); });
             body.appendChild(col.col);
         } else {
             var items = favTab === 'movies' ? IPTV.favoriteMovies() : IPTV.favoriteSeries();
+            if (ff) { items = items.filter(function (x) { return ff(x.name, x.group); }); if (!items.length) return noMatch(body, 'favorites'); }
             if (!items.length) return body.appendChild(el('div', 'iptv-empty', '<p>No favourites yet. Press INFO on a poster and choose Add to Favorites.</p>'));
             grid(body, items, function (x) { return poster(x, favTab === 'movies' ? 'movie' : 'series'); });
         }
@@ -568,7 +610,7 @@ var IPTVUI = (function () {
             r.programmes.forEach(function (x) {
                 var p = x.programme, ch = x.channel, airing = p.start <= Date.now();
                 var row = el('div', 'ir prog focusable', '<span class="when' + (airing ? ' now' : '') + '">' + (airing ? 'Now' : esc(day(p.start))) + '<b>' + clock(p.start) + '</b></span>' +
-                    '<span class="logo" style="background-image:url(\'' + esc(ch.logo || '') + '\')"></span><span class="lbl">' + esc(p.title) +
+                    IPTV.logoHtml(ch, 'logo') + '<span class="lbl">' + esc(p.title) +
                     '<small>' + dot(ch.playlistID) + esc([ch.name, p.category].filter(Boolean).join(' · ')) + ' ' + tagsHtml(ch) + '</small></span>');
                 row.setAttribute('data-anchor', '');
                 row._select = function () { programmeSheet(ch, p, r.channels.length ? r.channels : [ch]); };
@@ -586,6 +628,10 @@ var IPTVUI = (function () {
 
     function jobs(body, kind) {
         var list = IPTVRec.list(kind);
+        var sec = kind === 'download' ? 'downloads' : 'recordings';
+        if (list.length || sq[sec]) { var jh = el('div', 'hlist iptv-guidehead'); searchBar(jh, sec, kind === 'download' ? 'downloads' : 'recordings'); body.appendChild(jh); }
+        var jf = matcher(sec);
+        if (jf) { list = list.filter(function (j) { return jf(j.title, j.subtitle); }); if (!list.length) return noMatch(body, sec); }
         if (!IPTVRec.supported()) body.appendChild(el('div', 'muted pad', 'Recording and downloads work on the TV only (not in a desktop browser).'));
         if (!list.length) {
             body.appendChild(el('div', 'iptv-empty', '<p>' + (kind === 'download' ? 'No downloads. Download movies and episodes from their pages, or past programmes from the TV Guide.' :
@@ -597,7 +643,8 @@ var IPTVUI = (function () {
             var state = { scheduled: 'Scheduled · ' + day(j.start) + ' ' + clock(j.start), running: kind === 'recording' ? '● Recording' : 'Downloading', done: 'Ready', failed: 'Failed', cancelled: 'Cancelled' }[j.state];
             var size = j.received ? (j.received / 1048576).toFixed(0) + ' MB' : '';
             var pct = j.expected ? Math.round(j.received / j.expected * 100) : 0;
-            var r = el('div', 'ir job focusable', '<span class="logo" style="background-image:url(\'' + esc(j.poster || '') + '\')"></span><span class="lbl">' + esc(j.title) +
+            var jch = j.channelID && IPTV.channel(j.channelID);
+            var r = el('div', 'ir job focusable', IPTV.logoHtml(jch || { name: j.subtitle || j.title }, 'logo', j.poster || (jch && IPTV.logo(jch))) + '<span class="lbl">' + esc(j.title) +
                 '<small>' + esc([j.subtitle, state, size, pct ? pct + '%' : '', j.error].filter(Boolean).join(' · ')) + '</small></span>');
             r._select = function () { if (j.state === 'done') IPTVPlayer.start({ file: j }, null, function () { K().show(); }); else jobOptions(j); };
             r._options = function () { jobOptions(j); };
@@ -618,11 +665,15 @@ var IPTVUI = (function () {
     /* ---------- Playlists ---------- */
 
     function playlists(body) {
+        var ph = el('div', 'hlist iptv-guidehead'); searchBar(ph, 'playlists', 'playlists and settings'); body.appendChild(ph);
+        var pf = matcher('playlists');
         var col = column('channels wide');
+        function hdr(t) { if (!pf) col.page.appendChild(el('div', 'ir-h', t)); }
         var add = el('div', 'ir focusable', '<span class="lbl">＋ Add Playlist</span>');
         add._select = function () { editPlaylist(null); };
-        col.page.appendChild(add);
+        if (!pf) col.page.appendChild(add);
         IPTV.playlists().forEach(function (p) {
+            if (pf && !pf(p.name, p.url, p.kind === 'xtream' ? 'Xtream Codes' : 'M3U')) return;
             var c = IPTV.content(p.id), a = c && c.account;
             var lines = [p.kind === 'xtream' ? 'Xtream Codes' : 'M3U playlist', p.enabled ? '' : 'Off',
                 c ? c.channels.length + ' channels · ' + c.movies.length + ' movies · ' + c.series.length + ' series' : '',
@@ -639,11 +690,11 @@ var IPTVUI = (function () {
             };
             col.page.appendChild(r);
         });
-        function item(label, detail, fn) { var r = el('div', 'ir focusable', '<span class="lbl">' + esc(label) + (detail ? '<small>' + esc(detail) + '</small>' : '') + '</span>'); r._select = fn; col.page.appendChild(r); }
-        col.page.appendChild(el('div', 'ir-h', 'TV Guide'));
+        function item(label, detail, fn) { if (pf && !pf(label, detail)) return; var r = el('div', 'ir focusable', '<span class="lbl">' + esc(label) + (detail ? '<small>' + esc(detail) + '</small>' : '') + '</span>'); r._select = fn; col.page.appendChild(r); }
+        hdr('TV Guide');
         item('Refresh Guide', IPTV.guideLoading() ? 'Loading…' : IPTV.guideUpdated() ? 'Updated ' + day(IPTV.guideUpdated()) + ' ' + clock(IPTV.guideUpdated()) : 'Not loaded', function () { IPTV.refreshGuide().then(function () { K().show(); }); Util.toast('Loading the guide'); });
         item('Refresh Everything', '', function () { IPTV.refreshAll().then(function () { K().show(); }); Util.toast('Refreshing'); });
-        col.page.appendChild(el('div', 'ir-h', 'Parental Control'));
+        hdr('Parental Control');
         if (!IPTV.pin()) item('Set a PIN', 'Locked groups ask for it', function () { K().pinPad('New PIN', function (p) { IPTV.setPIN(p); K().show(); }); });
         else {
             item(IPTV.unlocked() ? 'Lock Locked Groups Again' : 'Unlock Locked Groups', '', function () {
@@ -653,10 +704,10 @@ var IPTVUI = (function () {
         }
         var hidden = IPTV.groups('live', true).concat(IPTV.groups('movie', true), IPTV.groups('series', true)).filter(IPTV.isHidden);
         if (hidden.length) {
-            col.page.appendChild(el('div', 'ir-h', 'Hidden Groups (OK to show again)'));
+            hdr('Hidden Groups (OK to show again)');
             hidden.forEach(function (g) { item(g.name, g.kind === 'live' ? 'Live TV' : g.kind === 'movie' ? 'Movies' : 'Series', function () { IPTV.setHidden(g, false); K().show(); }); });
         }
-        col.page.appendChild(el('div', 'ir-h', 'Library'));
+        hdr('Library');
         item('Clear Recently Watched', '', function () { IPTV.clearRecents(); Util.toast('Cleared'); });
         IPTV.reminders().forEach(function (r) { item('🔔 ' + r.title, r.channelName + ' · ' + day(r.start) + ' ' + clock(r.start), function () {}); });
         body.appendChild(col.col);

@@ -557,7 +557,20 @@ body.iptv-preview .pv-box { background: transparent; box-shadow: none; }
 .iptv-results h2 { margin: 20px 0 6px 120px; font-size: 30px; font-weight: 600; }
 
 .iptv-chcard { width: 300px; }
-.iptv-chcard .img.logo { height: 170px; background: #1d1d22 center / 70% auto no-repeat; display: flex; align-items: center; justify-content: center; font-size: 46px; font-weight: 700; color: var(--text3); }
+.iptv-chcard .img.chlogo { height: 170px; background: #1d1d22; font-size: 40px; }
+.iptv-chcard .img.chlogo img { left: 15%; top: 15%; width: 70%; height: 70%; }
+/* Channel logo box: initials underneath, the logo image on top once it loads. */
+.lg { position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 6px; background: rgba(255,255,255,.09); }
+.lg > b { font-weight: 700; color: var(--text3); font-size: 16px; letter-spacing: .5px; white-space: nowrap; overflow: hidden; text-overflow: clip; max-width: 92%; }
+.lg > img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: contain; }
+.lg.ok { background: transparent; }
+.focused .lg:not(.ok) { background: rgba(0,0,0,.08); }
+.focused .lg > b { color: #555; }
+.lg.ok > b { visibility: hidden; }
+.iptv-chcard .lg.ok { background: #1d1d22; }
+.o-logo.lg > b { font-size: 34px; }
+.pvlogo { width: 150px; height: 84px; margin-bottom: 14px; }
+.pvlogo > b { font-size: 26px; }
 .card .fav { position: absolute; right: 10px; top: 8px; color: var(--accent); font-size: 28px; text-shadow: 0 2px 6px rgba(0,0,0,.7); }
 .card .fallback { position: absolute; left: 14px; right: 14px; top: 40%; text-align: center; font-size: 24px; font-weight: 600; color: var(--text2); }
 .iptv-grid { display: flex; gap: 40px; padding: 22px 120px 26px; }

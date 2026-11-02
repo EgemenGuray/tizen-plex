@@ -293,7 +293,7 @@ var IPTVPlayer = (function () {
             var nn = IPTV.nowNext(ch), now = nn[0], next = nn[1];
             var pct = now ? Math.round((Date.now() - now.start) / (now.end - now.start) * 100) : 0;
             var rec = IPTVRec.recordingOf(ch);
-            html = '<div class="o-row"><div class="o-logo" style="background-image:url(\'' + esc(ch.logo || '') + '\')"></div><div class="o-main">' +
+            html = '<div class="o-row">' + IPTV.logoHtml(ch, 'o-logo') + '<div class="o-main">' +
                 '<div class="o-title">' + (ch.number ? '<span class="o-num">' + ch.number + '</span>' : '') + esc(ch.name) +
                 ' <i class="o-live">LIVE</i>' + (rec ? ' <i class="o-rec">● REC</i>' : '') + tagsHtml(ch) + '</div>' +
                 (now ? '<div class="o-prog">' + esc(now.title) + '</div><div class="o-time">' + clock(now.start) + ' – ' + clock(now.end) +
@@ -347,7 +347,7 @@ var IPTVPlayer = (function () {
             var cur = channel();
             s.lineup.forEach(function (c, i) {
                 var now = IPTV.nowNext(c)[0];
-                rows.push({ html: '<span class="pn">' + (c.number || '') + '</span><span class="pl" style="background-image:url(\'' + esc(c.logo || '') + '\')"></span><span class="pt">' + esc(c.name) +
+                rows.push({ html: '<span class="pn">' + (c.number || '') + '</span>' + IPTV.logoHtml(c, 'pl') + '<span class="pt">' + esc(c.name) +
                     '<small>' + esc(now ? now.title : '') + '</small></span>', act: function () { tune(c); }, current: cur && c.id === cur.id });
                 if (cur && c.id === cur.id && p.sel === 0 && !p.placed) { p.sel = i; p.placed = true; }
             });

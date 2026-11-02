@@ -372,7 +372,7 @@ var IPTV = (function () {
 
     /* Regex scan rather than DOMParser: guides are tens of MB and the TV has little memory to spare. */
     function parseXMLTV(text, wantedIDs, wantedNames, from, to) {
-        var progs = {}, names = {}, kept = {};
+        var progs = {}, names = {}, kept = {}, icons = {};
         var chRe = /<channel\b[^>]*\bid="([^"]*)"[^>]*>([\s\S]*?)<\/channel>/g, m;
         while ((m = chRe.exec(text))) {
             var id = decode(m[1]).toLowerCase();
@@ -382,7 +382,11 @@ var IPTV = (function () {
                 if (wantedNames[k]) keep = true;
                 if (!names[k]) names[k] = id;
             }
-            if (keep) kept[id] = 1;
+            if (keep) {
+                kept[id] = 1;
+                var ic = /<icon\b[^>]*\bsrc="([^"]+)"/.exec(m[2]);
+                if (ic) icons[id] = decode(ic[1]);
+            }
         }
         var pRe = /<programme\b([^>]*)>([\s\S]*?)<\/programme>/g;
         while ((m = pRe.exec(text))) {
@@ -409,7 +413,7 @@ var IPTV = (function () {
             (progs[ch] = progs[ch] || []).push(p);
         }
         Object.keys(progs).forEach(function (k) { progs[k].sort(function (x, y) { return x.start - y.start; }); });
-        return { programmes: progs, names: names };
+        return { programmes: progs, names: names, icons: icons };
     }
 
     function tag(body, name) {
@@ -650,7 +654,7 @@ var IPTV = (function () {
         var ids = {}, names = {}, maxDays = 1;
         all.forEach(function (c) { if (c.epgID) ids[c.epgID.toLowerCase()] = 1; names[key(c.name)] = 1; if (c.catchup && c.catchup.days > maxDays) maxDays = c.catchup.days; });
         var from = Date.now() - Math.min(maxDays, 14) * 86400000, to = Date.now() + 4 * 86400000;
-        var merged = { programmes: {}, names: {} };
+        var merged = { programmes: {}, names: {}, icons: {} };
         var chain = Promise.resolve();
         urls.forEach(function (x) {
             chain = chain.then(function () {
@@ -658,6 +662,7 @@ var IPTV = (function () {
                     var g = parseXMLTV(text, ids, names, from, to);
                     Object.keys(g.programmes).forEach(function (k) { if (!merged.programmes[k]) merged.programmes[k] = g.programmes[k]; });
                     Object.keys(g.names).forEach(function (k) { if (!merged.names[k]) merged.names[k] = g.names[k]; });
+                    Object.keys(g.icons).forEach(function (k) { if (!merged.icons[k]) merged.icons[k] = g.icons[k]; });
                 }).catch(function (e) { Util.toast('Guide: ' + (e.message || e)); });
             });
         });
@@ -684,6 +689,36 @@ var IPTV = (function () {
         }
         keyCache[ch.id] = k;
         return k;
+    }
+
+    /* The playlist's logo, else the guide's icon for the channel. */
+    function logo(ch) {
+        if (!ch) return null;
+        if (ch.logo) return ch.logo;
+        var icons = guide.icons || {};
+        var id = ch.epgID && ch.epgID.toLowerCase();
+        if (id && icons[id]) return icons[id];
+        var k = guide.names[key(ch.name)];
+        return (k && icons[k]) || null;
+    }
+
+    /* "Kanal 2 HD" gives K2, "TRT 1" gives TRT 1, "Fox Sports" gives FOX, "Discovery Science" gives DS. */
+    function initials(name) {
+        var n = String(name || '').replace(/^\s*[A-Z]{2,4}\s*[:|\-]\s*/, '').replace(/\b(4K|UHD|FHD|HD|SD|HEVC|H265|50FPS|60FPS|RAW|BACKUP)\b/gi, '').trim();
+        var w = n.split(/\s+/).filter(Boolean);
+        if (!w.length) return '';
+        var num = w.length > 1 && /^\d+$/.test(w[1]) ? w[1] : '';
+        if (w[0].length <= 4) return (w[0] + (num ? ' ' + num : '')).toUpperCase();
+        if (num) return (w[0][0] + num).toUpperCase();
+        if (w.length > 1) return w.slice(0, 3).map(function (x) { return x[0]; }).join('').toUpperCase();
+        return w[0].slice(0, 5).toUpperCase();
+    }
+
+    /* A logo box: the channel's initials, covered by its logo once that loads. A broken logo just leaves the initials. */
+    function logoHtml(ch, cls, url) {
+        var u = url || logo(ch);
+        return '<span class="lg ' + (cls || '') + '"><b>' + Util.esc(initials(ch && ch.name)) + '</b>' +
+            (u ? '<img src="' + Util.esc(u) + '" alt="" onload="this.parentNode.className+=\' ok\'" onerror="this.parentNode.removeChild(this)">' : '') + '</span>';
     }
 
     function programmes(ch, from, to) {
@@ -892,7 +927,7 @@ var IPTV = (function () {
         guideLoading: function () { return guideLoading; }, guideUpdated: function () { return guide.updated; },
         hasGuide: function () { return Object.keys(guide.programmes).length > 0; },
         channels: function () { return visible.channels; }, movies: function () { return visible.movies; }, series: function () { return visible.series; },
-        channel: function (id) { return visible.byID[id]; },
+        channel: function (id) { return visible.byID[id]; }, logo: logo, logoHtml: logoHtml,
         groups: groups,
         inGroup: function (kind, g) {
             var l = kind === 'live' ? visible.channels : kind === 'movie' ? visible.movies : visible.series;

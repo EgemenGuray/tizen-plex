@@ -10,7 +10,8 @@ var UI = (function () {
 
     var DEFAULTS = {
         truehd: 'auto', audioLang: '', subtitles: 'forced', subLang: '', subSize: 'm', subColor: 'white', subBg: 'shadow',
-        subPos: 'bottom', autoplay: true, autoSkipIntro: false, picture: 'letterbox', tmdbArt: true
+        subPos: 'bottom', autoplay: true, autoSkipIntro: false, picture: 'letterbox', tmdbArt: true,
+        intro: 'chime'
     };
     var settings = Util.store('settings') || {};
     Object.keys(DEFAULTS).forEach(function (k) { if (settings[k] === undefined) settings[k] = DEFAULTS[k]; });
@@ -1160,7 +1161,8 @@ var UI = (function () {
         ],
         autoplay: [{ value: true, label: 'On' }, { value: false, label: 'Off' }],
         tmdbArt: [{ value: true, label: 'Fill in missing artwork' }, { value: false, label: 'Off' }],
-        autoSkipIntro: [{ value: true, label: 'On' }, { value: false, label: 'Off' }]
+        autoSkipIntro: [{ value: true, label: 'On' }, { value: false, label: 'Off' }],
+        intro: [{ value: 'chime', label: 'With chime' }, { value: 'silent', label: 'Silent' }, { value: 'off', label: 'Off' }]
     };
     function optLabel(key) {
         var o = OPTIONS[key].filter(function (x) { return x.value === settings[key]; })[0];
@@ -1205,6 +1207,8 @@ var UI = (function () {
             opt('Autoplay next episode', 'autoplay');
             opt('Skip intros automatically', 'autoSkipIntro');
             opt('Picture size', 'picture');
+            section('Startup');
+            opt('Lumen intro', 'intro', 'The light, the chime and the zoom when the app opens. Any button skips it.');
             section('Online services');
             function keyRow(label, name, note, secret) {
                 var v = Online.keys()[name];

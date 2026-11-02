@@ -1,7 +1,7 @@
 /* Lumen startup intro. Same timeline as the Apple app (IntroView.swift) and Shield (IntroScreen.kt).
  * draw(ctx, w, h, t) paints one frame at t seconds. Total length: LumenIntro.DURATION.
  * Timeline: 0-0.35 black | 0.35-0.95 the corner light ignites | 0.95 chime strike + flare
- * 0.95-1.9 light spills along the L | 1.9-2.4 hold | 2.4-3.2 zoom into the light | 3.05-3.6 fade into the app.
+ * 0.95-1.9 light spills along the L | 1.9-2.4 hold | 2.4-3.2 straight zoom into the middle of the L | 3.05-3.6 fade into the app.
  */
 (function (root) {
   var STRIKE = 0.95, ZOOM0 = 2.4, ZOOM1 = 3.2, FADE0 = 3.05, DURATION = 3.6;
@@ -22,9 +22,7 @@
       flare: t < 0.5 ? 0 : flare,
       radius: 3 + 61 * spill,                    // gradient radius in logo units (final 64 = the icon)
       glow: Math.min(1, ignite * (0.85 + 0.55 * flare) + breathe),
-      zoom: Math.exp(Math.log(70) * easeIn(z)),  // 1 -> 70x
-      pan: easeOut(z * 1.4),                     // corner moves to screen centre while zooming
-      wash: 0.5 * smooth(0.45, 1, z),           // warm wash as we fly into the light
+      zoom: Math.exp(Math.log(14) * easeIn(z)),  // 1 -> 14x, straight in: the L opens like a curtain onto the app
       fade: 1 - smooth(FADE0, DURATION, t)       // intro layer opacity
     };
   }
@@ -37,12 +35,10 @@
     ctx.fillRect(0, 0, w, h);
     var unit = Math.min(w, h) * 0.0058;          // logo units -> px (mark is ~66x76 units incl. caps)
     var cx = 33, cy = 79;                        // light source: the corner of the L
-    var fx = 38, fy = 74;                        // zoom target: the brightest point on the bend
-    var restX = w / 2 + (fx - 59.5) * unit, restY = h / 2 + (fy - 47.5) * unit;
-    var px = restX + (w / 2 - restX) * s.pan, py = restY + (h / 2 - restY) * s.pan;
-    ctx.translate(px, py);
+    var mx = 59.5, my = 47.5;                    // middle of the L (centre of its bounds), kept at the screen centre
+    ctx.translate(w / 2, h / 2);
     ctx.scale(unit * s.zoom, unit * s.zoom);
-    ctx.translate(-fx, -fy);
+    ctx.translate(-mx, -my);
 
     // soft glow behind the corner
     if (s.glow > 0.001) {
@@ -88,10 +84,6 @@
       ctx.globalCompositeOperation = 'source-over';
     }
     ctx.restore();
-    if (s.wash > 0.001) {
-      ctx.fillStyle = 'rgba(255,228,190,' + s.wash + ')';
-      ctx.fillRect(0, 0, w, h);
-    }
   }
 
   root.LumenIntro = { draw: draw, state: state, DURATION: DURATION, STRIKE: STRIKE };

@@ -84,7 +84,7 @@ var IPTVUI = (function () {
             bar.setAttribute('data-anchor', 'top');
             var tabs = el('div', 'tabs hlist');
             var t1 = el('div', 'tab focusable active', 'Live TV'); t1._select = function () {};
-            var t2 = el('div', 'tab focusable', 'Sign in to Plex'); t2._select = function () { K().signIn(); };
+            var t2 = el('div', 'tab focusable', 'Plex'); t2._select = function () { K().signIn(); };
             tabs.appendChild(t1); tabs.appendChild(t2);
             bar.appendChild(tabs);
             page.appendChild(bar);

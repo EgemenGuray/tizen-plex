@@ -480,3 +480,6 @@ body.playing #toast { background: rgba(28,28,32,.88); }
 .entry-kb { overflow: hidden; margin: 10px -30px 0; }
 .entry-kb .keyboard { padding: 22px 40px; }
 .entry-kb .key { text-transform: none; }
+
+/* Startup intro: full-screen canvas above everything while it plays. */
+#intro { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; z-index: 9999; background: #000; }

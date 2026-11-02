@@ -22,6 +22,7 @@
         var key = CODES[e.keyCode];
         if (!key) return;
         e.preventDefault();
+        if (Intro.active()) { Intro.skip(); return; }   // any key skips the startup intro
         if (Player.active()) { Player.handleKey(key); return; }
         if (key === 'left' || key === 'right' || key === 'up' || key === 'down') UI.move(key);
         else if (key === 'enter') UI.select();
@@ -31,4 +32,8 @@
     });
 
     UI.start();
+
+    // Startup intro over the app while it loads (Settings → Startup intro: with chime / silent / off).
+    var mode = (Util.store('settings') || {}).intro || 'chime';
+    if (mode !== 'off') Intro.play({ sound: mode === 'chime' }, function () {});
 })();

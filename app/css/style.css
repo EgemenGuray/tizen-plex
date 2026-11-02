@@ -477,9 +477,18 @@ body.playing #toast { background: rgba(28,28,32,.88); }
 
 .entry-wrap { padding: 0 10px; }
 .entry-display { font-size: 40px; font-weight: 600; min-height: 70px; padding: 6px 20px; border-bottom: 2px solid rgba(255,255,255,.2); word-break: break-all; }
-.entry-kb { overflow: hidden; margin: 10px -30px 0; }
-.entry-kb .keyboard { padding: 22px 40px; }
-.entry-kb .key { text-transform: none; }
+.entry-field { display: flex; align-items: center; border-radius: 14px; background: rgba(255,255,255,.08); padding: 0 22px; margin-bottom: 18px; border: 3px solid transparent; }
+.entry-field.focused { border-color: #fff; }
+.entry-native { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text); font-size: 34px; font-weight: 600; line-height: 1.2; font-family: inherit; padding: 16px 0; }
+.entry-hint { font-size: 18px; color: var(--text3); margin-left: 16px; white-space: nowrap; }
+.entry-grid { display: flex; flex-direction: column; gap: 10px; align-items: center; }
+.entry-row { display: flex; gap: 10px; justify-content: center; }
+.entry-grid .key { text-transform: none; width: 74px; height: 64px; background: rgba(255,255,255,.07); font-size: 30px; }
+.entry-grid .key.wide { width: auto; min-width: 120px; padding: 0 18px; font-size: 22px; }
+.entry-grid .key.snip { font-size: 20px; min-width: 96px; }
+.entry-grid .key.k-done { background: var(--accent, #e5a00d); color: #000; }
+.entry-grid .key.k-shift.on { background: rgba(255,255,255,.35); }
+.entry-grid .key.focused { transform: scale(1.1); background: #fff; color: #000; }
 
 /* Startup intro: full-screen canvas above everything while it plays. */
 #intro { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; z-index: 9999; background: #000; }

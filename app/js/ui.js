@@ -303,38 +303,91 @@ var UI = (function () {
         }), { note: note });
     }
 
-    // Free text with the remote: a one-line keyboard with a shift key, for API keys and account names.
+    /* Free text entry: the TV's own keyboard (which the SmartThings phone app can also type into), plus an on-screen
+     * keyboard laid out as a grid for typing with the remote. Shortcuts cover the usual pieces of addresses. */
+    var nativeInput = null;
     function textEntry(title, value, cb, note) {
         var text = value || '', upper = false;
-        var display = el('div', 'entry-display', '');
-        var keys = el('div', 'track hlist keyboard');
-        var wrap = el('div', 'entry-kb');
-        wrap.appendChild(keys);
+        var field = document.createElement('input');
+        field.type = 'text';
+        field.className = 'entry-native';
+        field.setAttribute('autocomplete', 'off');
+        field.setAttribute('autocapitalize', 'off');
+        field.setAttribute('spellcheck', 'false');
+        field.value = text;
+        var fieldBox = el('div', 'entry-field focusable');
+        fieldBox.appendChild(field);
+        fieldBox.appendChild(el('span', 'entry-hint', 'OK: TV keyboard'));
+        fieldBox._select = function () { nativeInput = { field: field, done: function () { text = field.value; draw(); } }; field.focus(); };
+        field.addEventListener('input', function () { text = field.value; });
         function draw() {
-            display.innerHTML = (text ? Util.esc(text) : '<span class="muted">Empty</span>') + '<i class="caret"></i>';
-            Array.prototype.forEach.call(keys.children, function (k) {
-                if (k.getAttribute('data-c')) k.textContent = upper ? k.getAttribute('data-c').toUpperCase() : k.getAttribute('data-c');
+            if (field.value !== text) field.value = text;
+            // Keep the end of long addresses in view.
+            field.scrollLeft = field.scrollWidth;
+            Array.prototype.forEach.call(kb.querySelectorAll('[data-c]'), function (k) {
+                k.textContent = upper ? k.getAttribute('data-c').toUpperCase() : k.getAttribute('data-c');
             });
+            var sh = kb.querySelector('.k-shift');
+            if (sh) sh.classList.toggle('on', upper);
         }
-        var chars = 'abcdefghijklmnopqrstuvwxyz0123456789-_.@:/?=&%+~'.split('');
-        ['⇧'].concat(chars).concat(['⌫', 'Clear', 'Done']).forEach(function (k) {
-            var b = el('div', 'key focusable' + (k.length > 1 ? ' wide' : ''), k);
-            if (k.length === 1 && k !== '⇧' && k !== '⌫') b.setAttribute('data-c', k);
-            b._select = function () {
-                if (k === '⇧') upper = !upper;
-                else if (k === '⌫') text = text.slice(0, -1);
-                else if (k === 'Clear') text = '';
-                else if (k === 'Done') { closeSheet(); cb(text); return; }
-                else text += upper ? k.toUpperCase() : k;
-                draw();
-            };
-            keys.appendChild(b);
+        function done() { nativeInput = null; closeSheet(); cb(text); }
+        var kb = el('div', 'entry-grid');
+        var rows = [
+            '1234567890'.split(''),
+            'qwertyuiop'.split(''),
+            'asdfghjkl@'.split(''),
+            'zxcvbnm.:/'.split(''),
+            '-_?=&%+~#!'.split('')
+        ];
+        rows.forEach(function (r) {
+            var row = el('div', 'entry-row');
+            r.forEach(function (c) {
+                var b = el('div', 'key focusable', c);
+                b.setAttribute('data-c', c);
+                b._select = function () { text += upper ? c.toUpperCase() : c; draw(); };
+                row.appendChild(b);
+            });
+            kb.appendChild(row);
         });
-        draw();
+        var actions = el('div', 'entry-row');
+        [['⇧ Shift', function () { upper = !upper; }, 'k-shift'], ['Space', function () { text += ' '; }],
+         ['⌫ Delete', function () { text = text.slice(0, -1); }], ['Clear', function () { text = ''; }],
+         ['Done', done, 'k-done']].forEach(function (a) {
+            var b = el('div', 'key wide focusable ' + (a[2] || ''), a[0]);
+            b._select = function () { a[1](); if (a[1] !== done) draw(); };
+            actions.appendChild(b);
+        });
+        kb.appendChild(actions);
+        var snips = el('div', 'entry-row');
+        ['http://', 'https://', '.com', '.net', ':8080', '.m3u', 'www.'].forEach(function (t) {
+            var b = el('div', 'key wide snip focusable', t);
+            b._select = function () { text += t; draw(); };
+            snips.appendChild(b);
+        });
+        kb.appendChild(snips);
         var foot = el('div', 'entry-wrap');
-        foot.appendChild(display);
-        foot.appendChild(wrap);
-        openSheet(title, [], { footer: foot, wide: true, note: note });
+        foot.appendChild(fieldBox);
+        foot.appendChild(kb);
+        openSheet(title, [], { footer: foot, wide: true, note: note, onClose: function () { nativeInput = null; } });
+        draw();
+        focus(kb.querySelector('.key'));
+    }
+
+    /* Keys while the TV keyboard is open: Done (or Enter) keeps the text, Cancel or Back leaves the field.
+     * Returns true when the key belonged to the field. */
+    function nativeKey(e) {
+        if (!nativeInput || document.activeElement !== nativeInput.field) return false;
+        var c = e.keyCode;
+        if (c === 13 || c === 65376 || c === 65385 || c === 10009 || c === 27) {
+            e.preventDefault();
+            var n = nativeInput;
+            n.field.blur();
+            n.done();
+            return true;
+        }
+        // Up and down leave the field for the keyboard; everything else is typing.
+        if (c === 38 || c === 40) { nativeInput.field.blur(); nativeInput.done(); return false; }
+        return true;
     }
 
     // Number pad for Plex Home PINs.
@@ -1281,7 +1334,7 @@ var UI = (function () {
         // Building blocks for the Live TV (IPTV) screens in iptvui.js.
         kit: {
             el: el, button: button, lazyImg: lazyImg, push: push, replace: replace, show: show, nav: nav, focus: focus, refocus: refocus,
-            focused: function () { return focused; }, openSheet: openSheet, closeSheet: closeSheet, choose: choose, textEntry: textEntry,
+            focused: function () { return focused; }, nativeKey: nativeKey, openSheet: openSheet, closeSheet: closeSheet, choose: choose, textEntry: textEntry,
             pinPad: pinPad, backdrop: backdrop, ensureLibs: ensureLibs, signIn: function () { Util.store('iptv.only', null); replace(signInScreen); }
         }
     };

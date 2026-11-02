@@ -21,6 +21,7 @@
     };
 
     document.addEventListener('keydown', function (e) {
+        if (UI.kit.nativeKey(e)) return;   // typing in the TV keyboard
         var key = CODES[e.keyCode];
         if (!key) return;
         e.preventDefault();

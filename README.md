@@ -116,6 +116,20 @@ Ratings are cached for 7 days and artwork indefinitely, so browsing doesn't repe
 | Trakt scrobbling | Not added | Plex keeps watched status; Trakt would need a Trakt API app and sign-in |
 | Music, photos, Live TV | Not added | |
 
+## Live TV (IPTV)
+
+The **Live TV** tab works with or without Plex. Without a Plex account, choose *Live TV only* on the sign-in screen.
+
+- **Sources:** M3U playlists and Xtream Codes logins. Several sources can be on at once, and each gets a coloured dot. To skip typing with the remote, copy `app/js/iptvconfig.example.js` to `app/js/iptvconfig.js` (not committed) before building.
+- **Sections:** Home, Live TV, TV Guide, Movies, Series, Favorites, Search, Downloads, Recordings and Playlists.
+- **Home:** Continue Watching, recently watched channels, trending channels (your most-watched this week), favourite channels, and trending movies and series. Trending movies and series come from TMDB's weekly list matched to your sources when a TMDB key is set, and are the best-rated new additions otherwise.
+- **Live TV:** groups, channels with now-playing and progress, and a muted preview of the focused channel. Quality tags (4K, FHD, HD, SD, HDR, 5.1, Stereo, HEVC) are read from the names and then corrected from the real stream after a channel plays. You can filter by tag. INFO (or green) opens favourite, rename, record, hide group and PIN lock.
+- **TV Guide:** XMLTV guide (gzip too), catch-up for past programmes (default, append, shift, flussonic and Xtream timeshift), reminders, record and download.
+- **Player:** up and down or CH± to zap, number keys to tune, a channel list on the left, and audio, subtitles, record and picture on the right. It reconnects when a stream drops.
+- **Movies and Series:** groups, sorting, details from Xtream, resume, favourites and downloads.
+- **Search:** by channel name or by TV programme, with quality tags.
+- **Downloads and Recordings:** saved to `Downloads/Lumen` on the TV while Lumen is open. HLS channels are recorded segment by segment.
+
 ## Install on the TV (developer mode)
 
 ### 1. Set up a computer (Windows, macOS or Linux)
@@ -188,12 +202,18 @@ Keyboard controls in the browser:
 | `app/js/memory.js` | Per-title memory on the TV: position, version, audio track, subtitle |
 | `app/js/keys.example.js` | Template for build-time API keys (`keys.js`) |
 | `app/js/ui.js` | Screens, the tab bar, the top shelf, rows, sheets, and remote-control focus navigation |
+| `app/js/iptv.js` | Live TV data: M3U, Xtream Codes and XMLTV parsing, catch-up addresses, quality tags, favourites, resume, trending and search (IndexedDB cache) |
+| `app/js/iptvplayer.js` | Live TV player on AVPlay: zapping, channel list, tracks, reconnect, and the muted preview |
+| `app/js/iptvrec.js` | Downloads and recordings to the TV's Downloads folder |
+| `app/js/iptvui.js` | The Live TV screens |
+| `app/js/iptvconfig.example.js` | Template for playlists added on first launch (`iptvconfig.js`) |
 | `app/css/style.css` | The Apple TV-style look and animations |
 | `app/js/intro.js` | Startup intro: timeline and canvas renderer of the L (shared with the Apple and Shield apps), chime, skip |
 | `app/js/main.js` | Key registration and routing |
 | `scripts/build.sh` | Package, sign, install |
 
 ## What has and hasn't been checked
+- Live TV: in headless Chromium against a fake M3U, Xtream Codes and XMLTV server, every Live TV section was opened and screenshotted, along with channel options, the guide grid, movie and series pages, search by channel and by programme with a tag filter, and the player overlay and channel list. Not checked yet on the TV: AVPlay preview and muting (`tvaudiocontrol`), writing recordings through `tizen.filesystem`, playing a downloaded file, and real providers' catch-up.
 - Checked: all the JavaScript parses and stays ES5 (Tizen 6.5's browser). In headless Chromium against a mocked Plex server, these flows were run and screenshotted: home top shelf and rows, tab bar, library grid with filters, show page with seasons and episodes, details with badges and plan line, Audio & Subtitles sheet, cast & crew → person page (actor, director, writer across movies and shows), ratings chips, TMDB logo, search, settings, Plex Home user switch with PIN pad, playback with the overlay, scrubbing with BIF thumbnails, every panel tab, external subtitles, Skip Intro (jumped to the marker end) and Up Next (played the next episode). With TMDB, OMDb, Metacritic, Letterboxd and OpenSubtitles replaced by fake responses: OpenSubtitles search sent the file hash, the download showed on screen, stopping saved the position and subtitle, and replaying resumed at the saved point with the downloaded subtitle back on.
 - **Not yet checked on a real TV.** Things that need a first run on the QN900B:
   1. That AVPlay lists audio tracks in the same order as Plex. The app relies on this to switch tracks inside a file.

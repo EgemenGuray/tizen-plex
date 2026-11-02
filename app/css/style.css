@@ -483,3 +483,154 @@ body.playing #toast { background: rgba(28,28,32,.88); }
 
 /* Startup intro: full-screen canvas above everything while it plays. */
 #intro { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; z-index: 9999; background: #000; }
+
+/* ---------- Live TV (IPTV) ---------- */
+
+.iptv-secwrap { overflow: hidden; margin-top: -24px; }
+.iptv-secwrap .track { gap: 14px; padding: 14px 120px 18px; }
+.iptv-body { position: relative; }
+.iptv-guidehead, .iptv-tags, .iptv-seasons { display: flex; flex-wrap: nowrap; gap: 14px; padding: 6px 120px 14px; align-items: center; }
+.btn.pill.small { padding: 8px 22px; font-size: 21px; }
+.btn.wide-pill { min-width: 480px; }
+.gday { margin-left: auto; font-size: 26px; color: var(--text2); }
+.iptv-empty { padding: 90px 120px 30px; text-align: center; }
+.iptv-empty h1 { font-size: 52px; margin-bottom: 24px; }
+.iptv-empty p { font-size: 28px; color: var(--text2); max-width: 1200px; margin: 0 auto 14px; line-height: 1.4; }
+.btn-row.center { justify-content: center; }
+.iptv-hint { position: absolute; left: 120px; top: 776px; font-size: 21px; color: var(--text3); }
+.iptv-hint b { color: var(--text2); margin-right: 6px; }
+
+.qtag { display: inline-block; font-style: normal; font-size: 15px; font-weight: 700; line-height: 1; padding: 4px 7px; margin-left: 6px; border-radius: 5px;
+    vertical-align: middle; border: 1.5px solid rgba(255,255,255,.55); color: rgba(255,255,255,.85); }
+.qtag.q-4K { background: #f5c518; border-color: #f5c518; color: #000; }
+.qtag.q-FHD { background: rgba(255,255,255,.88); border-color: transparent; color: #000; }
+.qtag.q-HDR { background: #8a5cf6; border-color: #8a5cf6; color: #fff; }
+.qtag.q-51 { border-color: #7ed98b; color: #7ed98b; }
+.sdot { display: inline-block; width: 12px; height: 12px; border-radius: 6px; margin-right: 10px; vertical-align: middle; }
+.sdot.big { width: 18px; height: 18px; border-radius: 9px; margin-right: 22px; flex: 0 0 18px; }
+
+.iptv-cols { display: flex; gap: 24px; padding: 0 120px; height: 640px; }
+.iptv-col { position: relative; overflow: hidden; border-radius: 18px; }
+.iptv-col.groups { width: 380px; flex: 0 0 380px; background: rgba(255,255,255,.04); }
+.iptv-col.channels { flex: 1; min-width: 0; }
+.iptv-col.channels.wide { height: 760px; margin: 0 120px; }
+.iptv-col.preview { width: 560px; flex: 0 0 560px; overflow: visible; }
+.iptv-col .page { padding: 10px 10px 300px; -webkit-animation: none; animation: none; }
+.pv-box { width: 560px; height: 315px; border-radius: 14px; background: #121216; box-shadow: 0 0 0 1px rgba(255,255,255,.08); }
+body.iptv-preview, body.iptv-preview html { background: transparent; }
+body.iptv-preview #backdrop { display: none; }
+body.iptv-preview .pv-box { background: transparent; box-shadow: none; }
+.pv-info { padding: 22px 6px 0; }
+.pv-info .t { font-size: 30px; font-weight: 600; margin-bottom: 10px; }
+.pv-info .p { font-size: 26px; }
+.pv-info .s { font-size: 21px; color: var(--text2); margin-top: 6px; }
+.pv-info .d { font-size: 21px; color: var(--text3); margin-top: 12px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+
+.ir { display: flex; align-items: center; padding: 12px 18px; border-radius: 12px; font-size: 26px; min-height: 60px;
+    transition: transform .2s var(--ease), background-color .15s, color .15s; }
+.ir.on { background: rgba(255,255,255,.12); }
+.ir .lbl { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ir small { display: block; font-size: 19px; color: var(--text2); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ir .num { width: 58px; flex: 0 0 58px; color: var(--text3); font-size: 21px; text-align: right; margin-right: 14px; }
+.ir .logo { width: 84px; height: 48px; flex: 0 0 84px; margin-right: 18px; background: center / contain no-repeat; }
+.ir .lock { margin-left: 10px; font-size: 20px; }
+.ir .star { font-style: normal; color: var(--accent); }
+.ir .cu { font-style: normal; color: var(--text2); }
+.rec { font-style: normal; color: #ff3b30; }
+.ir .pbar { display: inline-block; width: 90px; height: 4px; margin-left: 12px; vertical-align: middle; background: rgba(255,255,255,.2); border-radius: 2px; overflow: hidden; }
+.ir .pbar i { display: block; height: 100%; background: var(--text2); }
+.ir.focused { background: #fff; color: #000; transform: scale(1.02); box-shadow: 0 10px 24px rgba(0,0,0,.4); }
+.ir.focused small, .ir.focused .num { color: rgba(0,0,0,.6); }
+.ir.focused .qtag { border-color: rgba(0,0,0,.5); color: #000; }
+.ir.focused .qtag.q-FHD { background: #000; color: #fff; }
+.ir-h { font-size: 21px; font-weight: 600; text-transform: uppercase; letter-spacing: .6px; color: var(--text3); padding: 26px 18px 8px; }
+.ir.ep .thumb { position: relative; width: 240px; height: 135px; flex: 0 0 240px; margin-right: 26px; border-radius: 10px; background: #24242a center / cover; overflow: hidden; }
+.ir.ep .lbl { white-space: normal; }
+.ir.ep small { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ir.ep .bar, .card .bar { position: absolute; left: 10px; right: 10px; bottom: 10px; height: 5px; border-radius: 3px; background: rgba(0,0,0,.5); display: block; overflow: hidden; }
+.ir.ep .bar b, .card .bar i { display: block; height: 100%; background: #fff; }
+.ir.prog { margin: 0 120px; }
+.ir.prog .when { width: 160px; flex: 0 0 160px; font-size: 20px; color: var(--text2); }
+.ir.prog .when b { display: block; font-size: 26px; color: var(--text); }
+.ir.prog .when.now b { color: #ff453a; }
+.ir.prog.focused .when, .ir.prog.focused .when b { color: #000; }
+.iptv-results h2 { margin: 20px 0 6px 120px; font-size: 30px; font-weight: 600; }
+
+.iptv-chcard { width: 300px; }
+.iptv-chcard .img.logo { height: 170px; background: #1d1d22 center / 70% auto no-repeat; display: flex; align-items: center; justify-content: center; font-size: 46px; font-weight: 700; color: var(--text3); }
+.card .fav { position: absolute; right: 10px; top: 8px; color: var(--accent); font-size: 28px; text-shadow: 0 2px 6px rgba(0,0,0,.7); }
+.card .fallback { position: absolute; left: 14px; right: 14px; top: 40%; text-align: center; font-size: 24px; font-weight: 600; color: var(--text2); }
+.iptv-grid { display: flex; gap: 40px; padding: 22px 120px 26px; }
+
+.iptv-detail .iptv-dhead { display: flex; gap: 60px; padding: 110px 120px 0; }
+.iptv-dhead .dposter { width: 300px; height: 450px; flex: 0 0 300px; border-radius: 16px; background: #24242a center / cover; box-shadow: 0 20px 50px rgba(0,0,0,.6); }
+.iptv-dhead .dmain { flex: 1; min-width: 0; max-width: 1100px; }
+.iptv-dhead h1 { font-size: 64px; font-weight: 700; letter-spacing: -1px; margin-bottom: 14px; }
+.iptv-dhead .meta { font-size: 26px; color: var(--text2); margin-bottom: 22px; }
+.iptv-dhead .plot { font-size: 26px; line-height: 1.45; margin-bottom: 16px; display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
+.iptv-dhead p.muted { font-size: 22px; margin-bottom: 6px; }
+.iptv-detail > .btn-row { padding: 0 120px 20px 480px; }
+.iptv-detail > .iptv-seasons { padding-left: 120px; }
+.iptv-detail > .ir.ep { margin: 0 120px 6px; }
+
+/* TV guide */
+.g-ruler { display: flex; height: 40px; font-size: 21px; color: var(--text2); margin: 0 120px; }
+.g-ruler span { width: 320px; flex: 0 0 320px; border-left: 1px solid rgba(255,255,255,.15); padding-left: 10px; }
+.iptv-col.guide { margin: 0 120px; height: 660px; }
+.iptv-col.guide .page { padding: 0 0 300px; }
+.g-row { display: flex; height: 76px; margin-bottom: 6px; }
+.g-ch { width: 300px; flex: 0 0 300px; display: flex; align-items: center; font-size: 22px; padding-right: 14px; overflow: hidden; white-space: nowrap; }
+.g-ch .logo { width: 70px; height: 40px; flex: 0 0 70px; margin-right: 14px; background: center / contain no-repeat; }
+.g-cells { display: flex; overflow: hidden; }
+.g-gap { flex: 0 0 auto; }
+.g-cell { flex: 0 0 auto; margin-right: 6px; height: 76px; padding: 10px 14px; border-radius: 10px; background: rgba(255,255,255,.07); font-size: 22px;
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis; transition: background-color .15s, color .15s; }
+.g-cell small { display: block; font-size: 18px; color: var(--text3); margin-top: 4px; }
+.g-cell.airing { background: rgba(255,255,255,.14); }
+.g-cell.empty { color: var(--text3); }
+.g-cell.focused { background: #fff; color: #000; }
+.g-cell.focused small { color: rgba(0,0,0,.6); }
+.g-now { position: absolute; top: 0; bottom: 0; width: 3px; background: #ff453a; z-index: 3; pointer-events: none; }
+
+/* Live TV player */
+#iptv-ui { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; z-index: 20; }
+#iptv-osd { position: absolute; left: 0; right: 0; bottom: 0; padding: 60px 120px 60px; opacity: 0; transition: opacity .3s;
+    background: linear-gradient(to top, rgba(0,0,0,.92) 0%, rgba(0,0,0,.7) 60%, rgba(0,0,0,0) 100%); }
+#iptv-ui.osd #iptv-osd { opacity: 1; }
+.o-row { display: flex; align-items: flex-start; gap: 34px; }
+.o-logo { width: 180px; height: 100px; flex: 0 0 180px; background: center / contain no-repeat; }
+.o-main { flex: 1; min-width: 0; }
+.o-title { font-size: 40px; font-weight: 700; margin-bottom: 8px; }
+.o-num { color: var(--text2); margin-right: 18px; }
+.o-live, .o-rec { font-style: normal; font-size: 18px; font-weight: 800; padding: 4px 9px; border-radius: 6px; vertical-align: middle; margin-left: 10px; }
+.o-live { background: #ff3b30; color: #fff; }
+.o-rec { border: 2px solid #ff3b30; color: #ff3b30; }
+.o-prog { font-size: 32px; margin-bottom: 6px; }
+.o-time, .o-next { font-size: 24px; color: var(--text2); margin-top: 4px; }
+.o-bar { display: inline-block; width: 300px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.25); margin-left: 18px; vertical-align: middle; overflow: hidden; }
+.o-bar.wide { width: 100%; margin: 18px 0 8px; }
+.o-bar i { display: block; height: 100%; background: #fff; }
+.o-times { display: flex; justify-content: space-between; font-size: 24px; color: var(--text2); }
+.o-clock { font-size: 34px; color: var(--text2); }
+.o-hint { margin-top: 22px; font-size: 21px; color: var(--text3); }
+.o-hint b { color: var(--text2); margin: 0 6px 0 18px; }
+#iptv-panel { position: absolute; top: 0; bottom: 0; width: 640px; padding: 50px 30px; background: rgba(20,20,24,.94); overflow: hidden; }
+#iptv-panel.ip-channels { left: 0; }
+#iptv-panel.ip-tracks { right: 0; }
+#iptv-panel h3 { margin: 0 0 20px 16px; font-size: 34px; }
+.ip-list { transition: transform .25s var(--ease); }
+.ip-h { font-size: 20px; font-weight: 600; text-transform: uppercase; letter-spacing: .6px; color: var(--text3); padding: 18px 16px 6px; }
+.ip-row { display: flex; align-items: center; padding: 12px 16px; border-radius: 12px; font-size: 25px; white-space: nowrap; overflow: hidden; }
+.ip-row small { display: block; font-size: 19px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; }
+.ip-row.cur { color: var(--accent); }
+.ip-row.sel { background: #fff; color: #000; }
+.ip-row.sel small { color: rgba(0,0,0,.6); }
+.ip-row .pn { width: 56px; flex: 0 0 56px; color: var(--text3); font-size: 20px; }
+.ip-row .pl { width: 70px; height: 40px; flex: 0 0 70px; margin-right: 14px; background: center / contain no-repeat; }
+.ip-row .pt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#iptv-num { position: absolute; right: 120px; top: 80px; font-size: 90px; font-weight: 700; text-shadow: 0 4px 20px rgba(0,0,0,.8); }
+#iptv-status { position: absolute; left: 50%; top: 46%; width: 1000px; margin-left: -500px; text-align: center; font-size: 30px; padding: 24px; border-radius: 18px; background: rgba(20,20,24,.85); }
+#iptv-sub { position: absolute; left: 160px; right: 160px; bottom: 90px; text-align: center; font-size: 44px; text-shadow: 0 2px 8px #000, 0 0 3px #000; }
+#iptv-spinner { position: absolute; left: 50%; top: 50%; width: 80px; height: 80px; margin: -40px 0 0 -40px; border-radius: 50%; display: none;
+    border: 6px solid rgba(255,255,255,.2); border-top-color: #fff; -webkit-animation: spin 1s linear infinite; animation: spin 1s linear infinite; }
+#iptv-ui.buffering #iptv-spinner { display: block; }

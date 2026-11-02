@@ -35,6 +35,8 @@ var UI = (function () {
 
     function move(dir) {
         if (!focused || !scope().contains(focused)) return focus(focusables()[0]);
+        // A screen can name the next element itself (side-by-side lists in Live TV).
+        if (focused._nav && focused._nav[dir]) { var to = focused._nav[dir](); if (to) return focus(to); }
         var hl = hlistOf(focused);
         if (hl && (dir === 'left' || dir === 'right')) {
             var sib = focused;
@@ -313,7 +315,7 @@ var UI = (function () {
                 if (k.getAttribute('data-c')) k.textContent = upper ? k.getAttribute('data-c').toUpperCase() : k.getAttribute('data-c');
             });
         }
-        var chars = 'abcdefghijklmnopqrstuvwxyz0123456789-_.@'.split('');
+        var chars = 'abcdefghijklmnopqrstuvwxyz0123456789-_.@:/?=&%+~'.split('');
         ['⇧'].concat(chars).concat(['⌫', 'Clear', 'Done']).forEach(function (k) {
             var b = el('div', 'key focusable' + (k.length > 1 ? ' wide' : ''), k);
             if (k.length === 1 && k !== '⇧' && k !== '⌫') b.setAttribute('data-c', k);
@@ -370,12 +372,13 @@ var UI = (function () {
     function back() {
         if (closeSheet()) return true;
         if (stack.length > 1) { stack.pop(); show(); return true; }
-        if (stack[0] && stack[0].tab && stack[0].tab !== 'home') { replace(homeScreen, 'home'); return true; }
+        if (stack[0] && stack[0].tab && stack[0].tab !== 'home' && Plex.state.token) { replace(homeScreen, 'home'); return true; }
         return false;
     }
 
     function show() {
         var top = stack[stack.length - 1];
+        if (window.IPTVPlayer) IPTVPlayer.stopPreview();
         closeSheet(true);
         focused = null;
         document.body.classList.remove('scrolled');
@@ -427,7 +430,8 @@ var UI = (function () {
             t._select = function () { if (id !== active) { replace(render, id); stack[0].onTab = true; } };
             tabs.appendChild(t);
         }
-        tab('home', 'Home', homeScreen);
+        if (Plex.state.token) tab('home', 'Home', homeScreen);
+        tab('iptv', 'Live TV', function (p) { return IPTVUI.screen(p); });
         (libs || []).forEach(function (l) { tab('lib' + l.key, l.title, function (p) { return libraryScreen(p, l, true); }); });
         tab('search', 'Search', searchScreen);
         tab('settings', 'Settings', settingsScreen);
@@ -523,6 +527,7 @@ var UI = (function () {
             page.appendChild(el('p', 'muted', 'This screen moves on by itself once you sign in.'));
             var bl = el('div', 'hlist btn-row');
             bl.appendChild(button('New Code', function () { replace(signInScreen); }));
+            bl.appendChild(button('Live TV only (IPTV, no Plex)', function () { clearInterval(pinPoll); pinPoll = null; Util.store('iptv.only', true); replace(function (p) { return IPTVUI.screen(p); }, 'iptv'); }));
             page.appendChild(bl);
             var ids = [pin.id].concat(strong ? [strong.id] : []);
             pinPoll = setInterval(function () {
@@ -1260,13 +1265,20 @@ var UI = (function () {
     }
 
     function start() {
-        if (!Plex.state.token) replace(signInScreen);
+        if (!Plex.state.token && Util.store('iptv.only')) replace(function (p) { return IPTVUI.screen(p); }, 'iptv');
+        else if (!Plex.state.token) replace(signInScreen);
         else if (!Plex.state.server) replace(serversScreen);
         else replace(homeScreen, 'home');
     }
 
     return {
         start: start, move: move, select: select, back: back, settings: settings,
-        play: play, sheetOpen: function () { return !!sheet; }
+        play: play, sheetOpen: function () { return !!sheet; },
+        // Building blocks for the Live TV (IPTV) screens in iptvui.js.
+        kit: {
+            el: el, button: button, lazyImg: lazyImg, push: push, replace: replace, show: show, nav: nav, focus: focus, refocus: refocus,
+            focused: function () { return focused; }, openSheet: openSheet, closeSheet: closeSheet, choose: choose, textEntry: textEntry,
+            pinPad: pinPad, backdrop: backdrop, ensureLibs: ensureLibs, signIn: function () { Util.store('iptv.only', null); replace(signInScreen); }
+        }
     };
 })();

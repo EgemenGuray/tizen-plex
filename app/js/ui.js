@@ -303,38 +303,115 @@ var UI = (function () {
         }), { note: note });
     }
 
-    // Free text with the remote: a one-line keyboard with a shift key, for API keys and account names.
+    /* Free text entry: the TV's own keyboard (which the SmartThings phone app can also type into), plus an on-screen
+     * keyboard laid out as a grid for typing with the remote. Shortcuts cover the usual pieces of addresses. */
+    var nativeInput = null;
     function textEntry(title, value, cb, note) {
-        var text = value || '', upper = false;
-        var display = el('div', 'entry-display', '');
-        var keys = el('div', 'track hlist keyboard');
-        var wrap = el('div', 'entry-kb');
-        wrap.appendChild(keys);
-        function draw() {
-            display.innerHTML = (text ? Util.esc(text) : '<span class="muted">Empty</span>') + '<i class="caret"></i>';
-            Array.prototype.forEach.call(keys.children, function (k) {
-                if (k.getAttribute('data-c')) k.textContent = upper ? k.getAttribute('data-c').toUpperCase() : k.getAttribute('data-c');
+        var text = value || '';
+        var field = document.createElement('input');
+        field.type = 'text';
+        field.className = 'entry-native';
+        field.setAttribute('autocomplete', 'off');
+        field.setAttribute('autocapitalize', 'off');
+        field.setAttribute('spellcheck', 'false');
+        field.value = text;
+        var fieldBox = el('div', 'entry-field focusable');
+        fieldBox.appendChild(field);
+        fieldBox.appendChild(el('span', 'entry-hint', 'OK: TV keyboard'));
+        fieldBox._select = function () { nativeInput = { field: field, done: function () { text = field.value; draw(); } }; field.focus(); };
+        field.addEventListener('input', function () { text = field.value; });
+        /* Like Apple TV: one sliding row of characters (it wraps around at the ends), with the modes,
+         * Space, Delete and Done always one step below it. */
+        var MODES = [
+            ['abc', 'abcdefghijklmnopqrstuvwxyz.@-_/:'],
+            ['ABC', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ.@-_/:'],
+            ['123', '1234567890.:/-_@'],
+            ['#+=', '?=&%+~#!*$,;()[]\'"<>|\\^`{}']
+        ];
+        var mode = 0;
+        var strip = el('div', 'track hlist entry-strip');
+        strip._edge = function (dir) {   // wrap around
+            var ks = strip.querySelectorAll('.key');
+            focus(dir === 'right' ? ks[0] : ks[ks.length - 1]);
+        };
+        function fillStrip() {
+            strip.innerHTML = '';
+            MODES[mode][1].split('').forEach(function (c) {
+                var b = el('div', 'key focusable', c);
+                b._select = function () { type(c); };
+                strip.appendChild(b);
             });
+            strip._x = 0;
+            strip.style.transform = '';
+            Array.prototype.forEach.call(kb.querySelectorAll('.k-mode'), function (m, i) { m.classList.toggle('on', i === mode); });
         }
-        var chars = 'abcdefghijklmnopqrstuvwxyz0123456789-_.@:/?=&%+~'.split('');
-        ['⇧'].concat(chars).concat(['⌫', 'Clear', 'Done']).forEach(function (k) {
-            var b = el('div', 'key focusable' + (k.length > 1 ? ' wide' : ''), k);
-            if (k.length === 1 && k !== '⇧' && k !== '⌫') b.setAttribute('data-c', k);
-            b._select = function () {
-                if (k === '⇧') upper = !upper;
-                else if (k === '⌫') text = text.slice(0, -1);
-                else if (k === 'Clear') text = '';
-                else if (k === 'Done') { closeSheet(); cb(text); return; }
-                else text += upper ? k.toUpperCase() : k;
-                draw();
-            };
-            keys.appendChild(b);
+        function type(t) { text += t; draw(); }
+        function draw() {
+            if (field.value !== text) field.value = text;
+            // Keep the end of long addresses in view.
+            field.scrollLeft = field.scrollWidth;
+        }
+        function done() { nativeInput = null; closeSheet(); cb(text); }
+        var kb = el('div', 'entry-kb');
+        var stripView = el('div', 'entry-stripview');
+        stripView.appendChild(strip);
+        kb.appendChild(stripView);
+        var actions = el('div', 'entry-row hlist');
+        MODES.forEach(function (m, i) {
+            var b = el('div', 'key wide k-mode focusable', m[0]);
+            b._select = function () { mode = i; fillStrip(); };
+            actions.appendChild(b);
         });
-        draw();
+        [['Space', function () { type(' '); }],
+         ['⌫ Delete', function () { text = text.slice(0, -1); draw(); }, 'k-del'],
+         ['Clear', function () { text = ''; draw(); }],
+         ['Done', done, 'k-done']].forEach(function (a) {
+            var b = el('div', 'key wide focusable ' + (a[2] || ''), a[0]);
+            b._select = a[1];
+            actions.appendChild(b);
+        });
+        kb.appendChild(actions);
+        var snips = el('div', 'entry-row hlist');
+        ['http://', 'https://', 'www.', '.com', '.net', '.org', ':8080', '.m3u', '.m3u8'].forEach(function (t) {
+            var b = el('div', 'key wide snip focusable', t);
+            b._select = function () { type(t); };
+            snips.appendChild(b);
+        });
+        kb.appendChild(snips);
+        fillStrip();
         var foot = el('div', 'entry-wrap');
-        foot.appendChild(display);
-        foot.appendChild(wrap);
-        openSheet(title, [], { footer: foot, wide: true, note: note });
+        foot.appendChild(fieldBox);
+        foot.appendChild(kb);
+        entry = { type: type, del: function () { text = text.slice(0, -1); draw(); }, done: done };
+        openSheet(title, [], { footer: foot, wide: true, note: note, onClose: function () { nativeInput = null; entry = null; } });
+        draw();
+        focus(strip.querySelector('.key'));
+    }
+
+    /* Remote keys while the keyboard is open: number keys type digits. */
+    var entry = null;
+    function entryKey(key) {
+        if (!entry || !sheet) return false;
+        var m = /^d(\d)$/.exec(key);
+        if (m) { entry.type(m[1]); return true; }
+        return false;
+    }
+
+    /* Keys while the TV keyboard is open: Done (or Enter) keeps the text, Cancel or Back leaves the field.
+     * Returns true when the key belonged to the field. */
+    function nativeKey(e) {
+        if (!nativeInput || document.activeElement !== nativeInput.field) return false;
+        var c = e.keyCode;
+        if (c === 13 || c === 65376 || c === 65385 || c === 10009 || c === 27) {
+            e.preventDefault();
+            var n = nativeInput;
+            n.field.blur();
+            n.done();
+            return true;
+        }
+        // Up and down leave the field for the keyboard; everything else is typing.
+        if (c === 38 || c === 40) { nativeInput.field.blur(); nativeInput.done(); return false; }
+        return true;
     }
 
     // Number pad for Plex Home PINs.
@@ -1113,15 +1190,12 @@ var UI = (function () {
                     searchState.results = res; drawResults();
                 }).catch(function (e) { Util.toast(e.message); });
             }, 450);
-            'abcdefghijklmnopqrstuvwxyz1234567890'.split('').concat(['space', '⌫', 'clear']).forEach(function (k) {
-                var b = el('div', 'key focusable' + (k.length > 1 ? ' wide' : ''), k === 'space' ? 'Space' : k === 'clear' ? 'Clear' : k);
-                b._select = function () {
-                    if (k === 'space') searchState.q += ' ';
-                    else if (k === '⌫') searchState.q = searchState.q.slice(0, -1);
-                    else if (k === 'clear') searchState.q = '';
-                    else searchState.q += k;
-                    drawQ(); run();
-                };
+            // The same keyboard as everywhere else; the results follow what was typed.
+            [['⌕  Type to search', function () {
+                textEntry('Search Plex', searchState.q, function (t) { searchState.q = t; drawQ(); run(); });
+            }], ['Clear', function () { searchState.q = ''; drawQ(); run(); }]].forEach(function (k) {
+                var b = el('div', 'key wide focusable', k[0]);
+                b._select = k[1];
                 keys.appendChild(b);
             });
             keys.firstChild.setAttribute('data-autofocus', '');
@@ -1281,7 +1355,7 @@ var UI = (function () {
         // Building blocks for the Live TV (IPTV) screens in iptvui.js.
         kit: {
             el: el, button: button, lazyImg: lazyImg, push: push, replace: replace, show: show, nav: nav, focus: focus, refocus: refocus,
-            focused: function () { return focused; }, openSheet: openSheet, closeSheet: closeSheet, choose: choose, textEntry: textEntry,
+            focused: function () { return focused; }, nativeKey: nativeKey, entryKey: entryKey, openSheet: openSheet, closeSheet: closeSheet, choose: choose, textEntry: textEntry,
             pinPad: pinPad, backdrop: backdrop, ensureLibs: ensureLibs, signIn: function () { Util.store('iptv.only', null); replace(signInScreen); }
         }
     };

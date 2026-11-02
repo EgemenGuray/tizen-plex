@@ -22,6 +22,7 @@ It is a sideloaded Tizen web app. It plays through Samsung's AVPlay API, the sam
 ## What the app does
 
 ### Looks and navigation (Apple TV style)
+- **Startup intro** (3.6 s, once per launch): in the dark the light in the corner of the L ignites, the Lumen chime plays, then the camera zooms straight into the middle of the L and Home opens behind it. Any button skips it; Settings → Startup → Lumen intro: with chime, silent or off. The chime (`app/media/lumen_chime.mp3`) is an original synthesized sound.
 - **Tab bar** at the top: Home, each movie and TV library, Search, Settings, plus a clock and the current Plex Home user.
 - **Home** opens on a full-screen **top shelf**: big artwork, the title logo (when Plex has one), year, rating, runtime, genres and summary, with Play/Resume and More Info. It moves to the next title every 9 s while you rest on it, and ◀ ▶ past the buttons flips between titles. Below it: Continue Watching (wide cards with progress bars) and Recently Added rows for every library.
 - Rows slide sideways and the page slides up so the focused item stays in a steady place. Focused artwork lifts and grows with a light sheen; the background cross-fades to the focused title's art. Everything animates with GPU transforms, which the TV handles smoothly.
@@ -207,6 +208,7 @@ Keyboard controls in the browser:
 | `app/js/iptvui.js` | The Live TV screens |
 | `app/js/iptvconfig.example.js` | Template for playlists added on first launch (`iptvconfig.js`) |
 | `app/css/style.css` | The Apple TV-style look and animations |
+| `app/js/intro.js` | Startup intro: timeline and canvas renderer of the L (shared with the Apple and Shield apps), chime, skip |
 | `app/js/main.js` | Key registration and routing |
 | `scripts/build.sh` | Package, sign, install |
 

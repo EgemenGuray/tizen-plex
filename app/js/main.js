@@ -24,6 +24,7 @@
         var key = CODES[e.keyCode];
         if (!key) return;
         e.preventDefault();
+        if (Intro.active()) { Intro.skip(); return; }   // any key skips the startup intro
         if (Player.active()) { Player.handleKey(key); return; }
         if (IPTVPlayer.active()) { IPTVPlayer.handleKey(key); return; }
         if (/^d\d$/.test(key)) return;
@@ -37,4 +38,8 @@
 
     IPTV.init().then(null, function () {});
     UI.start();
+
+    // Startup intro over the app while it loads (Settings → Startup intro: with chime / silent / off).
+    var mode = (Util.store('settings') || {}).intro || 'chime';
+    if (mode !== 'off') Intro.play({ sound: mode === 'chime' }, function () {});
 })();

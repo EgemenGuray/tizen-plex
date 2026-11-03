@@ -482,15 +482,19 @@ body.playing #toast { background: rgba(28,28,32,.88); }
 .entry-native { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text); font-size: 34px; font-weight: 600; line-height: 1.2; font-family: inherit; padding: 16px 0; }
 .entry-hint { font-size: 18px; color: var(--text3); margin-left: 16px; white-space: nowrap; }
 .entry-kb { display: flex; flex-direction: column; gap: 14px; align-items: center; }
-.entry-stripview { width: 100%; overflow: hidden; position: relative; border-radius: 14px; background: rgba(255,255,255,.04); }
-.entry-strip.track { gap: 8px; padding: 14px 80px; transition: transform .18s ease-out; }
-.entry-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.entry-kb.qwerty { gap: 10px; padding: 16px 0 6px; border-radius: 14px; background: rgba(255,255,255,.04); }
+.entry-row { display: flex; gap: 10px; justify-content: center; flex-wrap: nowrap; }
+.entry-row + .entry-row:last-child { margin-top: 8px; }
 .entry-kb .key { text-transform: none; width: 66px; height: 66px; background: rgba(255,255,255,.07); font-size: 32px; }
 .entry-kb .key.wide { width: auto; min-width: 100px; padding: 0 18px; font-size: 22px; }
 .entry-kb .key.snip { font-size: 20px; min-width: 90px; height: 54px; }
 .entry-kb .key.k-done { background: var(--accent, #e5a00d); color: #000; min-width: 140px; }
 .entry-kb .key.k-del { min-width: 140px; }
-.entry-kb .key.k-mode.on { background: rgba(255,255,255,.3); }
+.entry-kb .key.k-shift { min-width: 100px; font-size: 30px; }
+.entry-kb .key.k-shift.on, .entry-kb .key.k-sym.on { background: rgba(255,255,255,.3); }
+.entry-kb .key.k-shift.lock { background: rgba(255,255,255,.5); color: #000; }
+.entry-kb .key.k-space { min-width: 380px; }
+.entry-kb .key.k-del2 { font-size: 28px; }
 .entry-kb .key.focused { transform: scale(1.12); background: #fff; color: #000; }
 
 /* Startup intro: full-screen canvas above everything while it plays. */

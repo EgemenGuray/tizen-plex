@@ -72,7 +72,19 @@ var Util = (function () {
         toastTimer = setTimeout(function () { el.classList.add('hidden'); }, ms || 5000);
     }
 
+    /* The TV's screensaver: off while video plays, back on when it pauses or stops. Only calls the TV when it changes. */
+    var saverOff = false;
+    function screenSaver(on) {
+        if (saverOff === !on) return;
+        saverOff = !on;
+        try {
+            var ac = webapis.appcommon, st = ac.AppCommonScreenSaverState;
+            ac.setScreenSaver(on ? st.SCREEN_SAVER_ON : st.SCREEN_SAVER_OFF, function () {}, function () {});
+        } catch (e) { /* not on a TV */ }
+    }
+
     return {
+        screenSaver: screenSaver,
         store: store, uuid: uuid, qs: qs, esc: esc, fmtTime: fmtTime, fmtDuration: fmtDuration,
         fmtClock: fmtClock, debounce: debounce, toast: toast
     };

@@ -73,6 +73,8 @@ body.scrolled #backdrop .bd-shade { background: linear-gradient(180deg, rgba(8,8
 }
 @-webkit-keyframes page-in { from { opacity: 0; -webkit-transform: translateY(24px); } to { opacity: 1; } }
 @keyframes page-in { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; } }
+/* A page brought back by Back (or refreshed in place) appears as it was, without sliding in again. */
+#app > .page.restored { -webkit-animation: none; animation: none; }
 
 .spinner {
     position: absolute; left: 50%; top: 50%; width: 72px; height: 72px; margin: -36px 0 0 -36px;
@@ -102,15 +104,24 @@ body.scrolled #backdrop .bd-shade { background: linear-gradient(180deg, rgba(8,8
 
 /* ---------- tab bar ---------- */
 
-.nav { height: 150px; display: flex; align-items: center; justify-content: center; position: relative; z-index: 2; }
+.nav { height: 150px; display: flex; align-items: center; justify-content: center; position: relative; z-index: 2; padding: 0 320px; }
 .tabs { display: flex; gap: 6px; padding: 8px; border-radius: 50px; background: rgba(60,60,68,.55); }
+.tabs.many { gap: 0; padding: 6px; }
+.tabs.many .tab { padding: 10px 16px; font-size: 24px; }
+/* Plex | Live TV: a small segmented switch at the left of the bar. */
+.modes { position: absolute; left: 80px; top: 50%; margin-top: -30px; height: 60px; display: flex; align-items: center; padding: 5px;
+    border-radius: 34px; background: rgba(40,40,46,.7); box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.12); }
+.seg { padding: 10px 22px; border-radius: 26px; font-size: 22px; font-weight: 600; color: var(--text3); white-space: nowrap;
+    transition: transform .25s var(--ease), background-color .2s, color .2s; }
+.seg.active { color: var(--text); background: rgba(255,255,255,.2); }
+.seg.focused { background: #fff; color: #000; transform: scale(1.1); box-shadow: 0 8px 22px rgba(0,0,0,.45); }
 .tab {
-    padding: 12px 34px; border-radius: 40px; font-size: 27px; font-weight: 500; color: var(--text2);
+    padding: 12px 34px; border-radius: 40px; font-size: 27px; font-weight: 500; color: var(--text2); white-space: nowrap;
     transition: transform .25s var(--ease), background-color .2s, color .2s;
 }
 .tab.active { color: var(--text); background: rgba(255,255,255,.16); }
 .tab.focused { background: #fff; color: #000; transform: scale(1.1); box-shadow: 0 10px 26px rgba(0,0,0,.45); }
-.nav-right { position: absolute; right: 120px; top: 50%; margin-top: -30px; display: flex; align-items: center; gap: 24px; height: 60px; }
+.nav-right { position: absolute; right: 80px; top: 50%; margin-top: -30px; display: flex; align-items: center; gap: 24px; height: 60px; }
 .clock { font-size: 30px; font-weight: 500; color: var(--text2); }
 .avatar {
     width: 60px; height: 60px; border-radius: 50%; background: #3a3a44 center / cover; display: flex;
@@ -502,8 +513,6 @@ body.playing #toast { background: rgba(28,28,32,.88); }
 
 /* ---------- Live TV (IPTV) ---------- */
 
-.iptv-secwrap { overflow: hidden; margin-top: -24px; }
-.iptv-secwrap .track { gap: 14px; padding: 14px 120px 18px; }
 .iptv-body { position: relative; }
 .iptv-guidehead, .iptv-tags, .iptv-seasons { display: flex; flex-wrap: nowrap; gap: 14px; padding: 6px 120px 14px; align-items: center; }
 .btn.pill.small { padding: 8px 22px; font-size: 21px; }

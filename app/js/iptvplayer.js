@@ -346,13 +346,23 @@ var IPTVPlayer = (function () {
     function renderPanel() {
         var p = s.panel, rows = [];
         if (p.kind === 'channels') {
-            var cur = channel();
-            s.lineup.forEach(function (c, i) {
-                var now = IPTV.nowNext(c)[0];
-                rows.push({ html: '<span class="pn">' + (c.number || '') + '</span>' + IPTV.logoHtml(c, 'pl') + '<span class="pt">' + esc(c.name) +
-                    '<small>' + esc(now ? now.title : '') + '</small></span>', act: function () { tune(c); }, current: cur && c.id === cur.id });
-                if (cur && c.id === cur.id && p.sel === 0 && !p.placed) { p.sel = i; p.placed = true; }
-            });
+            // A lineup can hold 20k channels: only the rows around the selection are drawn on each key press.
+            var cur = channel(), lu = s.lineup;
+            if (!p.placed) {
+                p.placed = true;
+                for (var k = 0; cur && k < lu.length; k++) if (lu[k].id === cur.id) { p.sel = k; break; }
+            }
+            if (!p.all) p.all = lu.map(function (c) { return { act: function () { tune(c); } }; });
+            p.rows = p.all;
+            if (p.sel >= lu.length) p.sel = Math.max(0, lu.length - 1);
+            var a = Math.max(0, p.sel - 15), b = Math.min(lu.length, p.sel + 25), h = '<h3>Channels</h3><div class="ip-list">';
+            for (var j = a; j < b; j++) {
+                var c = lu[j], now = IPTV.nowNext(c)[0];
+                h += '<div class="ip-row' + (j === p.sel ? ' sel' : '') + (cur && c.id === cur.id ? ' cur' : '') + '" data-i="' + j + '">' +
+                    '<span class="pn">' + (c.number || '') + '</span>' + IPTV.logoHtml(c, 'pl') + '<span class="pt">' + esc(c.name) +
+                    '<small>' + esc(now ? now.title : '') + '</small></span></div>';
+            }
+            return drawPanel(p, h);
         } else {
             rows.push({ header: 'Audio' });
             tracks().filter(function (t) { return t.type === 'AUDIO'; }).forEach(function (t) {
@@ -391,6 +401,10 @@ var IPTVPlayer = (function () {
             html += '<div class="ip-row' + (i === p.sel ? ' sel' : '') + (r.current ? ' cur' : '') + '" data-i="' + i + '">' + r.html + '</div>';
             i++;
         });
+        drawPanel(p, html);
+    }
+
+    function drawPanel(p, html) {
         $('iptv-panel').className = 'ip-' + p.kind;
         $('iptv-panel').innerHTML = html + '</div>';
         var sel = $('iptv-panel').querySelector('.ip-row.sel');

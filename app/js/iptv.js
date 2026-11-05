@@ -64,179 +64,67 @@ var IPTV = (function () {
         });
     }
 
-    function getText(url, ua) {
-        return request(url, { binary: true, userAgent: ua }).then(function (buf) { return decodeBody(buf); });
-    }
 
-    /* gzip guides (.xml.gz) through DecompressionStream where the runtime has it. */
-    function decodeBody(buf) {
-        var b = new Uint8Array(buf);
-        if (b.length > 2 && b[0] === 0x1f && b[1] === 0x8b) {
-            if (!window.DecompressionStream || !window.Response) return Promise.reject(new Error('This TV cannot unpack .gz guides; use an uncompressed XMLTV address.'));
-            var stream = new Response(buf).body.pipeThrough(new DecompressionStream('gzip'));
-            return new Response(stream).text();
+    /* ---------- helpers (the parsers live in iptvparse.js, shared with the worker) ---------- */
+
+    var P = IPTVParse;
+    var str = P.str, int = P.int, key = P.key;
+
+    /* ---------- background worker ---------- */
+
+    // Big playlists and guides are downloaded, parsed and saved in a Web Worker so the remote stays responsive
+    // while they load. Without one (or if it fails to start) the same jobs run here.
+    var worker = null, jobs = {}, jobSeq = 0, workerFetch = true;
+    try {
+        if (window.Worker) {
+            worker = new Worker('js/iptvworker.js');
+            worker.onmessage = function (e) {
+                var m = e.data, j = jobs[m.id];
+                if (!j) return;
+                if (m.part) { var k = m.part[0].split(':')[0]; (j.parts[k] = j.parts[k] || []).push(m.part[1]); return; }
+                delete jobs[m.id];
+                if (m.error) j.fail(m); else j.ok(P.join(m.result, j.parts));
+            };
+            worker.onerror = function (e) {
+                // The script didn't load: finish the waiting jobs here and stop using the worker.
+                if (e && e.preventDefault) e.preventDefault();
+                var w = jobs; jobs = {}; worker = null;
+                Object.keys(w).forEach(function (k) { w[k].retry(); });
+            };
         }
-        var text;
-        try { text = new TextDecoder('utf-8', { fatal: true }).decode(b); } catch (e) { text = new TextDecoder('iso-8859-1').decode(b); }
-        return Promise.resolve(text);
+    } catch (e) { worker = null; }
+
+    /* Downloads in the page what the worker shouldn't fetch itself: sources that need a User-Agent (only the page's
+     * requests carry it on the TV), or everything once the worker's own requests have failed. */
+    function prefetch(d) {
+        return Promise.all(d.sources.map(function (src) {
+            if (src.buf || (workerFetch && !src.ua)) return src;
+            return P.get(src).then(function (b) { return { buf: b }; }, function (e) { return { error: e.message || String(e) }; });
+        })).then(function (srcs) { var o = {}; for (var k in d) o[k] = d[k]; o.sources = srcs; return o; });
     }
 
-    /* ---------- helpers ---------- */
-
-    function str(v) { return v === null || v === undefined || v === '' ? null : String(v); }
-    function int(v) { var n = parseInt(v, 10); return isNaN(n) ? null : n; }
-    function num(v) { var n = parseFloat(v); return isNaN(n) ? null : n; }
-    function bool(v) { return v === true || v === 1 || v === '1' || v === 'true'; }
-    function dateOf(v) { var n = int(v); return n && n > 0 ? n * 1000 : null; }
-    function yearOf(v) { var s = str(v); if (!s) return null; var y = parseInt(s.slice(0, 4), 10); return y > 1880 ? y : null; }
-    function hash(s) { var h = 0; for (var i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; } return (h >>> 0).toString(36); }
-
-    /* Name key for matching against the guide: lower case, letters and digits only, no quality tags. */
-    function key(name) {
-        var s = (' ' + String(name || '').toLowerCase() + ' ');
-        [' hd', ' fhd', ' uhd', ' 4k', ' sd', ' hevc', '(hd)', '[hd]'].forEach(function (t) { s = s.split(t).join(''); });
-        return s.replace(/[^a-z0-9À-ɏЀ-ӿ]/g, '');
-    }
-
-    function splitYear(name) {
-        var m = /^(.*?)[\s\-]*[\(\[]?((?:19|20)\d{2})[\)\]]?\s*$/.exec(name);
-        if (!m || !m[1].trim()) return { title: name, year: null };
-        return { title: m[1].trim(), year: parseInt(m[2], 10) };
-    }
-
-    function episodeInfo(name) {
-        var res = [/^(.*?)[\s._\-]*[Ss](\d{1,2})[\s._\-]*[Ee](\d{1,3})(.*)$/, /^(.*?)[\s._\-]+(\d{1,2})x(\d{1,3})(.*)$/];
-        for (var i = 0; i < res.length; i++) {
-            var m = res[i].exec(name);
-            if (!m) continue;
-            var show = m[1].replace(/\./g, ' ').replace(/^[\s\-_|]+|[\s\-_|]+$/g, '');
-            if (!show) continue;
-            var rest = m[4].replace(/\./g, ' ').replace(/^[\s\-_|]+|[\s\-_|]+$/g, '');
-            return { show: show, season: parseInt(m[2], 10), episode: parseInt(m[3], 10), title: rest || 'Episode ' + parseInt(m[3], 10) };
-        }
-        return null;
-    }
-
-    /* ---------- M3U ---------- */
-
-    function attrs(s) {
-        var out = {}, re = /([\w\-]+)=("([^"]*)"|(\S+))/g, m;
-        while ((m = re.exec(s))) out[m[1].toLowerCase()] = m[3] !== undefined ? m[3] : m[4];
-        return out;
-    }
-
-    function splitInfo(s) {
-        var q = false;
-        for (var i = 0; i < s.length; i++) {
-            if (s[i] === '"') q = !q;
-            else if (s[i] === ',' && !q) return [s.slice(0, i), s.slice(i + 1)];
-        }
-        return [s, ''];
-    }
-
-    function classify(url, name, type) {
-        if (type === 'movie' || type === 'movies' || type === 'vod') return 'movie';
-        if (type === 'series' || type === 'tvshow') return 'series';
-        if (type === 'live' || type === 'stream') return 'live';
-        var lower = url.toLowerCase();
-        if (lower.indexOf('/series/') >= 0) return 'series';
-        if (lower.indexOf('/movie/') >= 0 || lower.indexOf('/movies/') >= 0) return 'movie';
-        var ext = (lower.split('?')[0].match(/\.([a-z0-9]+)$/) || [])[1];
-        if (['mp4', 'mkv', 'avi', 'mov', 'm4v', 'wmv', 'webm'].indexOf(ext) >= 0) return episodeInfo(name) ? 'series' : 'movie';
-        return 'live';
-    }
-
-    function parseM3U(text, pl) {
-        var c = emptyContent(), pid = pl.id;
-        var header = null, info = null, grp = null, ua = null, seen = {}, seriesMap = {};
-        var lg = [], mg = [], sg = [], lgs = {}, mgs = {}, sgs = {};
-        function addGroup(list, set, g) { if (!set[g]) { set[g] = 1; list.push(g); } }
-        var lines = text.split(/\r?\n/);
-        for (var i = 0; i < lines.length; i++) {
-            var line = lines[i].trim();
-            if (!line) continue;
-            if (line.indexOf('#EXTM3U') === 0) {
-                var h = attrs(line.slice(7));
-                ['url-tvg', 'x-tvg-url', 'tvg-url'].forEach(function (k) {
-                    if (h[k]) h[k].split(',').forEach(function (u) { if (u.trim()) c.epgURLs.push(u.trim()); });
-                });
-                if (h.catchup || h['catchup-type']) header = { mode: h.catchup || h['catchup-type'], days: int(h['catchup-days']) || 7, source: h['catchup-source'] || null };
-                continue;
-            }
-            if (line.indexOf('#EXTINF') === 0) {
-                var parts = splitInfo(line.slice(line.indexOf(':') + 1));
-                info = { a: attrs(parts[0]), name: parts[1].trim() };
-                continue;
-            }
-            if (line.indexOf('#EXTGRP:') === 0) { grp = line.slice(8).trim(); continue; }
-            if (line.indexOf('#EXTVLCOPT:') === 0) {
-                var opt = line.slice(11);
-                if (/^http-user-agent=/i.test(opt)) ua = opt.slice(16);
-                continue;
-            }
-            if (line[0] === '#') continue;
-            var a = (info && info.a) || {};
-            var url = line;
-            var name = (info && info.name) || a['tvg-name'] || url;
-            var group = a['group-title'] || grp || 'Other';
-            var logo = a['tvg-logo'] || null;
-            var kind = classify(url, name, (a['tvg-type'] || a.type || '').toLowerCase());
-            if (kind === 'live') {
-                var id = pid + '|' + (a['tvg-id'] || '') + '|' + name;
-                if (seen[id]) id += '|' + hash(url);
-                seen[id] = 1;
-                var cu = null;
-                var mode = a.catchup || a['catchup-type'];
-                var days = int(a.timeshift || a['tvg-rec'] || a['catchup-days']);
-                if (mode) cu = { mode: mode, days: int(a['catchup-days']) || (header && header.days) || 7, source: a['catchup-source'] || (header && header.source) || null };
-                else if (days > 0) cu = { mode: (header && header.mode) || 'default', days: days, source: a['catchup-source'] || (header && header.source) || null };
-                else if (header) cu = { mode: header.mode, days: header.days, source: header.source };
-                if (cu && !cu.source && cu.mode === 'default' && (url.indexOf('/live/') >= 0 || url.split('/').length >= 6)) cu.mode = 'xc';
-                c.channels.push({
-                    id: id, playlistID: pid, name: name, number: int(a['tvg-chno'] || a['channel-number'] || a['tvg-num']),
-                    logo: logo, group: group, url: url, epgID: a['tvg-id'] || null, catchup: cu,
-                    userAgent: ua || a['user-agent'] || a['http-user-agent'] || null, streamID: null
-                });
-                addGroup(lg, lgs, group);
-            } else if (kind === 'movie') {
-                var ty = splitYear(name);
-                c.movies.push({ id: pid + '|m|' + name + '|' + hash(url), playlistID: pid, name: ty.title, poster: logo, group: group, url: url, rating: null, year: ty.year, added: null, streamID: null });
-                addGroup(mg, mgs, group);
-            } else {
-                var ep = episodeInfo(name);
-                var show = ep ? ep.show : name;
-                var sk = group + '|' + show.toLowerCase();
-                var e = { id: pid + '|e|' + hash(url), season: ep ? ep.season : 1, number: ep ? ep.episode : 1, title: ep ? ep.title : name, url: url, thumb: logo };
-                if (seriesMap[sk] !== undefined) c.series[seriesMap[sk]].episodes.push(e);
-                else {
-                    seriesMap[sk] = c.series.length;
-                    c.series.push({ id: pid + '|s|' + sk, playlistID: pid, name: show, poster: logo, group: group, episodes: [e] });
-                }
-                addGroup(sg, sgs, group);
-            }
-            info = null; grp = null; ua = null;
-        }
-        c.series.forEach(function (s) { s.episodes.sort(function (x, y) { return x.season - y.season || x.number - y.number; }); });
-        c.liveGroups = lg; c.movieGroups = mg; c.seriesGroups = sg;
-        return c;
-    }
-
-    function emptyContent() {
-        return { channels: [], movies: [], series: [], liveGroups: [], movieGroups: [], seriesGroups: [], epgURLs: [], serverTimeZone: null, account: null };
-    }
-
-    /* ---------- Xtream Codes ---------- */
-
-    function xtreamBase(raw) {
-        var s = String(raw || '').trim();
-        if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
-        s = s.split('?')[0];
-        ['/player_api.php', '/get.php', '/xmltv.php', '/'].forEach(function (x) { if (s.slice(-x.length) === x) s = s.slice(0, -x.length); });
-        return s.replace(/\/+$/, '');
+    /* Runs a job (see IPTVParse.job): 'm3u', 'xtream' or 'guide'. */
+    function work(op, d) {
+        if (!worker) return P.job(op, d);
+        return prefetch(d).then(function (d2) {
+            return new Promise(function (ok, fail) {
+                var id = ++jobSeq, local = function () { P.job(op, d).then(ok, fail); };
+                jobs[id] = {
+                    parts: {}, ok: ok, retry: local,
+                    fail: function (m) {
+                        // The worker couldn't reach the server: download in the page from now on.
+                        if (m.net && workerFetch) { workerFetch = false; work(op, d).then(ok, fail); } else fail(new Error(m.error));
+                    }
+                };
+                var bufs = d2.sources.map(function (x) { return x.buf; }).filter(Boolean);
+                try { worker.postMessage({ id: id, op: op, data: d2 }, bufs); }
+                catch (e) { delete jobs[id]; local(); }
+            });
+        });
     }
 
     function Xtream(pl) {
-        var base = xtreamBase(pl.url), u = encodeURIComponent(pl.username), p = encodeURIComponent(pl.password);
+        var base = P.xtreamBase(pl.url), u = encodeURIComponent(pl.username), p = encodeURIComponent(pl.password);
         var api = function (action, extra) {
             var q = { username: pl.username, password: pl.password };
             if (action) q.action = action;
@@ -246,11 +134,6 @@ var IPTV = (function () {
                 try { return t ? JSON.parse(t) : []; } catch (e) { throw new Error('This doesn\'t look like an Xtream Codes server.'); }
             });
         };
-        function list(v) {
-            if (Array.isArray(v)) return v;
-            if (v && typeof v === 'object') return Object.keys(v).map(function (k) { return v[k]; });
-            return [];
-        }
         return {
             base: base,
             epg: base + '/xmltv.php?' + Util.qs({ username: pl.username, password: pl.password }),
@@ -261,58 +144,19 @@ var IPTV = (function () {
                 return base + '/timeshift/' + u + '/' + p + '/' + minutes + '/' + tsDate(startMs, tz) + '/' + id + '.ts';
             },
             load: function () {
-                var self = this, c = emptyContent(), pid = pl.id;
+                var self = this, c = P.emptyContent();
                 return api(null).then(function (root) {
                     var user = root && root.user_info;
                     if (!user) throw new Error('This doesn\'t look like an Xtream Codes server.');
                     if (int(user.auth) === 0) throw new Error('The username or password was refused.');
-                    c.account = { status: str(user.status), expires: dateOf(user.exp_date), maxConnections: int(user.max_connections), activeConnections: int(user.active_cons), trial: bool(user.is_trial) };
+                    c.account = { status: str(user.status), expires: P.dateOf(user.exp_date), maxConnections: int(user.max_connections), activeConnections: int(user.active_cons), trial: P.bool(user.is_trial) };
                     c.serverTimeZone = root.server_info && str(root.server_info.timezone);
                     c.epgURLs = [self.epg];
-                    return Promise.all(['get_live_categories', 'get_live_streams', 'get_vod_categories', 'get_vod_streams', 'get_series_categories', 'get_series']
-                        .map(function (a) { return api(a).catch(function () { return []; }); }));
-                }).then(function (r) {
-                    function cats(v) { var m = {}, order = []; list(v).forEach(function (x) { var id = str(x.category_id), n = str(x.category_name); if (id && n) { m[id] = n; order.push(n); } }); return { map: m, order: order }; }
-                    var lc = cats(r[0]), vc = cats(r[2]), sc = cats(r[4]);
-                    var used = {};
-                    list(r[1]).forEach(function (s) {
-                        var id = int(s.stream_id); if (id === null) return;
-                        var g = lc.map[str(s.category_id)] || 'Other';
-                        used[g] = 1;
-                        var days = int(s.tv_archive_duration) || 0;
-                        c.channels.push({
-                            id: pid + '|' + id, playlistID: pid, name: str(s.name) || 'Channel ' + id, number: int(s.num), logo: str(s.stream_icon),
-                            group: g, url: self.live(id, 'ts'), epgID: str(s.epg_channel_id),
-                            catchup: bool(s.tv_archive) && days > 0 ? { mode: 'xc', days: days, source: null } : null,
-                            userAgent: pl.userAgent || null, streamID: id
-                        });
+                    // The six lists (50k films is a lot of JSON) are downloaded and parsed by the worker.
+                    var sources = ['get_live_categories', 'get_live_streams', 'get_vod_categories', 'get_vod_streams', 'get_series_categories', 'get_series'].map(function (a) {
+                        return { url: base + '/player_api.php?' + Util.qs({ username: pl.username, password: pl.password, action: a }), ua: pl.userAgent || null };
                     });
-                    c.liveGroups = lc.order.concat(['Other']).filter(function (g, i, a) { return used[g] && a.indexOf(g) === i; });
-                    used = {};
-                    list(r[3]).forEach(function (s) {
-                        var id = int(s.stream_id); if (id === null) return;
-                        var g = vc.map[str(s.category_id)] || 'Other';
-                        used[g] = 1;
-                        var ty = splitYear(str(s.name) || 'Film ' + id);
-                        c.movies.push({
-                            id: pid + '|m|' + id, playlistID: pid, name: ty.title, poster: str(s.stream_icon), group: g,
-                            url: self.movie(id, str(s.container_extension) || 'mp4'), rating: num(s.rating) || null,
-                            year: ty.year || yearOf(s.year) || yearOf(s.releasedate), added: dateOf(s.added), streamID: id
-                        });
-                    });
-                    c.movieGroups = vc.order.concat(['Other']).filter(function (g, i, a) { return used[g] && a.indexOf(g) === i; });
-                    used = {};
-                    list(r[5]).forEach(function (s) {
-                        var id = int(s.series_id); if (id === null) return;
-                        var g = sc.map[str(s.category_id)] || 'Other';
-                        used[g] = 1;
-                        c.series.push({
-                            id: pid + '|s|' + id, playlistID: pid, name: str(s.name) || 'Series ' + id, poster: str(s.cover), group: g,
-                            plot: str(s.plot), rating: num(s.rating) || null, year: yearOf(s.releaseDate) || yearOf(s.release_date), genre: str(s.genre), seriesID: id
-                        });
-                    });
-                    c.seriesGroups = sc.order.concat(['Other']).filter(function (g, i, a) { return used[g] && a.indexOf(g) === i; });
-                    return c;
+                    return work('xtream', { pl: { id: pl.id, url: pl.url, username: pl.username, password: pl.password, userAgent: pl.userAgent || '' }, content: c, sources: sources });
                 });
             },
             details: function (kind, id) {
@@ -321,8 +165,8 @@ var IPTV = (function () {
                     var d = {
                         plot: str(info.plot) || str(info.description), cast: str(info.cast) || str(info.actors), director: str(info.director),
                         genre: str(info.genre), released: str(info.releasedate || info.releaseDate || info.release_date),
-                        duration: num(info.duration_secs) || (num(info.episode_run_time) ? num(info.episode_run_time) * 60 : null),
-                        rating: num(info.rating) || null,
+                        duration: P.num(info.duration_secs) || (P.num(info.episode_run_time) ? P.num(info.episode_run_time) * 60 : null),
+                        rating: P.num(info.rating) || null,
                         backdrop: Array.isArray(info.backdrop_path) ? str(info.backdrop_path[0]) : str(info.backdrop_path),
                         poster: str(info.movie_image) || str(info.cover_big) || str(info.cover), episodes: []
                     };
@@ -335,7 +179,7 @@ var IPTV = (function () {
                             return {
                                 id: 'x|' + id + '|' + e.id, season: int(e.season) || 1, number: int(e.episode_num) || 0, title: str(e.title) || 'Episode',
                                 url: base + '/series/' + u + '/' + p + '/' + e.id + '.' + (str(e.container_extension) || 'mp4'), plot: str(ei.plot),
-                                thumb: str(ei.movie_image) || str(ei.cover_big), duration: num(ei.duration_secs)
+                                thumb: str(ei.movie_image) || str(ei.cover_big), duration: P.num(ei.duration_secs)
                             };
                         }).sort(function (x, y) { return x.season - y.season || x.number - y.number; });
                     }
@@ -358,76 +202,6 @@ var IPTV = (function () {
         function two(n) { return (n < 10 ? '0' : '') + n; }
         if (!parts) parts = { year: d.getUTCFullYear(), month: two(d.getUTCMonth() + 1), day: two(d.getUTCDate()), hour: two(d.getUTCHours()), minute: two(d.getUTCMinutes()) };
         return parts.year + '-' + parts.month + '-' + parts.day + ':' + (parts.hour === '24' ? '00' : parts.hour) + '-' + parts.minute;
-    }
-
-    /* ---------- XMLTV ---------- */
-
-    function xmltvDate(s) {
-        var m = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})?\s*([+\-]\d{4})?/.exec(String(s || '').trim());
-        if (!m) return null;
-        var t = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
-        if (m[7]) { var sign = m[7][0] === '-' ? -1 : 1; t -= sign * (parseInt(m[7].slice(1, 3), 10) * 60 + parseInt(m[7].slice(3, 5), 10)) * 60000; }
-        return t;
-    }
-
-    /* Regex scan rather than DOMParser: guides are tens of MB and the TV has little memory to spare. */
-    function parseXMLTV(text, wantedIDs, wantedNames, from, to) {
-        var progs = {}, names = {}, kept = {}, icons = {};
-        var chRe = /<channel\b[^>]*\bid="([^"]*)"[^>]*>([\s\S]*?)<\/channel>/g, m;
-        while ((m = chRe.exec(text))) {
-            var id = decode(m[1]).toLowerCase();
-            var dn = /<display-name[^>]*>([\s\S]*?)<\/display-name>/g, d, keep = !!wantedIDs[id];
-            while ((d = dn.exec(m[2]))) {
-                var k = key(decode(d[1]));
-                if (wantedNames[k]) keep = true;
-                if (!names[k]) names[k] = id;
-            }
-            if (keep) {
-                kept[id] = 1;
-                var ic = /<icon\b[^>]*\bsrc="([^"]+)"/.exec(m[2]);
-                if (ic) icons[id] = decode(ic[1]);
-            }
-        }
-        var pRe = /<programme\b([^>]*)>([\s\S]*?)<\/programme>/g;
-        while ((m = pRe.exec(text))) {
-            var a = m[1];
-            var ch = (/channel="([^"]*)"/.exec(a) || [])[1];
-            if (!ch) continue;
-            ch = decode(ch).toLowerCase();
-            if (!kept[ch] && !wantedIDs[ch]) continue;
-            var start = xmltvDate((/start="([^"]*)"/.exec(a) || [])[1]);
-            var stop = xmltvDate((/stop="([^"]*)"/.exec(a) || [])[1]) || (start + 3600000);
-            if (!start || stop <= from || start >= to) continue;
-            var body = m[2];
-            var p = { channel: ch, start: start, end: stop, title: tag(body, 'title') || '' };
-            var sub = tag(body, 'sub-title'), desc = tag(body, 'desc'), cat = tag(body, 'category');
-            var en = /<episode-num[^>]*system="xmltv_ns"[^>]*>([^<]*)</.exec(body);
-            if (en) {
-                var parts = en[1].split('.');
-                var sn = parseInt(parts[0], 10), ep = parseInt(parts[1], 10);
-                if (!isNaN(sn) && !isNaN(ep)) sub = 'S' + (sn + 1) + ' E' + (ep + 1) + (sub ? ' · ' + sub : '');
-            }
-            if (sub) p.episode = sub;
-            if (desc) p.desc = desc;
-            if (cat) p.category = cat;
-            (progs[ch] = progs[ch] || []).push(p);
-        }
-        Object.keys(progs).forEach(function (k) { progs[k].sort(function (x, y) { return x.start - y.start; }); });
-        return { programmes: progs, names: names, icons: icons };
-    }
-
-    function tag(body, name) {
-        var m = new RegExp('<' + name + '\\b[^>]*>([\\s\\S]*?)</' + name + '>').exec(body);
-        return m ? decode(m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')).trim() : null;
-    }
-
-    function decode(s) {
-        return String(s).replace(/&(amp|lt|gt|quot|apos|#\d+|#x[0-9a-f]+);/gi, function (all, e) {
-            var map = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
-            if (map[e.toLowerCase()]) return map[e.toLowerCase()];
-            if (e[1] === 'x' || e[1] === 'X') return String.fromCharCode(parseInt(e.slice(2), 16));
-            return String.fromCharCode(parseInt(e.slice(1), 10));
-        });
     }
 
     /* ---------- catch-up ---------- */
@@ -531,7 +305,10 @@ var IPTV = (function () {
 
     var playlists = pref('playlists') || [];
     var contents = {};
-    var guide = { programmes: {}, names: {}, updated: null };
+    // The guide keeps each channel's programmes as a JSON string (packed) and unpacks a channel the first time it
+    // is shown, so loading a big guide doesn't create hundreds of thousands of objects at once.
+    var guide = { packed: {}, names: {}, icons: {}, updated: null, count: 0 };
+    var unpacked = {};
     var keyCache = {};
     var loading = {}, errors = {}, guideLoading = false;
     var listeners = [];
@@ -540,7 +317,19 @@ var IPTV = (function () {
         renames: pref('renames') || {}, reminders: pref('reminders') || [], pin: pref('pin') || '', unlocked: false,
         positions: pref('positions') || {}, measured: pref('measured') || {}, resume: pref('resume') || [], plays: pref('plays') || {}
     };
-    var visible = { channels: [], movies: [], series: [], byID: {} };
+    var visible = { channels: [], movies: [], series: [], byGroup: {}, ids: {} };
+    // Look-ups by id, built the first time they're needed (a 50k-film map is not free on the TV).
+    function byID(kind) {
+        var m = visible.ids[kind];
+        if (m) return m;
+        m = visible.ids[kind] = {};
+        var l = visible[kind];
+        for (var i = 0; i < l.length; i++) m[l[i].id] = l[i];
+        return m;
+    }
+    var favSet = {};
+    function indexFavorites() { favSet = {}; state.favorites.forEach(function (id) { favSet[id] = 1; }); }
+    indexFavorites();
 
     // Playlists predefined in js/iptvconfig.js (not committed), so they don't have to be typed with the remote.
     if (window.LUMEN_IPTV && !playlists.length) {
@@ -562,37 +351,98 @@ var IPTV = (function () {
     function groupKey(pid, kind, name) { return pid + '|' + kind + '|' + name; }
 
     function rebuild() {
-        var ch = [], mv = [], se = [], byID = {};
+        var ch = [], mv = [], se = [], byGroup = {};
+        var hidden = {}, locked = {};
+        state.hidden.forEach(function (k) { hidden[k] = 1; });
+        if (!state.unlocked) state.locked.forEach(function (k) { locked[k] = 1; });
         playlists.forEach(function (p) {
             var c = contents[p.id];
             if (!p.enabled || !c) return;
-            function ok(kind, g) { var k = groupKey(p.id, kind, g); return state.hidden.indexOf(k) < 0 && (state.unlocked || state.locked.indexOf(k) < 0); }
-            c.channels.forEach(function (x) {
-                if (!ok('live', x.group)) return;
+            // Items come grouped, so the hidden/locked check and the group bucket are looked up once per run of a group.
+            function filer(kind) {
+                var lastG = null, lastB = null;
+                return function (g) {
+                    if (g !== lastG) {
+                        lastG = g;
+                        var k = groupKey(p.id, kind, g);
+                        lastB = hidden[k] || locked[k] ? null : (byGroup[k] || (byGroup[k] = []));
+                    }
+                    return lastB;
+                };
+            }
+            var f = filer('live'), i, x, b;
+            for (i = 0; i < c.channels.length; i++) {
+                x = c.channels[i]; b = f(x.group);
+                if (!b) continue;
                 var y = x;
                 if (state.renames[x.id] || (!x.userAgent && p.userAgent)) {
                     y = {}; for (var k in x) y[k] = x[k];
                     if (state.renames[x.id]) y.name = state.renames[x.id];
                     if (!y.userAgent && p.userAgent) y.userAgent = p.userAgent;
                 }
-                ch.push(y); byID[y.id] = y;
-            });
-            c.movies.forEach(function (x) { if (ok('movie', x.group)) mv.push(x); });
-            c.series.forEach(function (x) { if (ok('series', x.group)) se.push(x); });
+                ch.push(y); b.push(y);
+            }
+            f = filer('movie');
+            for (i = 0; i < c.movies.length; i++) { x = c.movies[i]; b = f(x.group); if (b) { mv.push(x); b.push(x); } }
+            f = filer('series');
+            for (i = 0; i < c.series.length; i++) { x = c.series[i]; b = f(x.group); if (b) { se.push(x); b.push(x); } }
         });
-        visible = { channels: ch, movies: mv, series: se, byID: byID };
+        visible = { channels: ch, movies: mv, series: se, byGroup: byGroup, ids: {} };
         keyCache = {};
         tagCache = {};
+        trendCache = null;
         changed('content');
     }
 
+    function setGuide(g) {
+        if (g && !g.packed && g.programmes) {
+            // Saved by an older Lumen: already unpacked.
+            unpacked = g.programmes;
+            g.packed = {};
+            Object.keys(unpacked).forEach(function (k) { g.packed[k] = ''; });
+            delete g.programmes;
+        } else unpacked = {};
+        g.names = g.names || {}; g.icons = g.icons || {};
+        g.count = Object.keys(g.packed).length;
+        guide = g;
+        keyCache = {};
+    }
+
+    /* Saved content, read slice by slice (each slice is its own short step for the page). */
+    function loadContent(id) {
+        return DB.get('content:' + id).then(function (meta) {
+            if (!meta || !meta.split) return meta;
+            var parts = {}, chain = Promise.resolve();
+            Object.keys(meta.split).forEach(function (k) {
+                parts[k] = [];
+                for (var i = 0; i < meta.split[k]; i++) (function (n) {
+                    chain = chain.then(function () { return DB.get('content:' + id + ':' + k + ':' + n); }).then(function (v) { parts[k].push(v || []); });
+                })(i);
+            });
+            return chain.then(function () { return P.join(meta, parts); });
+        });
+    }
+
+    function loadGuide() {
+        return DB.get('guide').then(function (g) {
+            if (!g || !g.parts) return g;
+            var chain = Promise.resolve();
+            g.packed = {};
+            for (var i = 0; i < g.parts; i++) (function (n) {
+                chain = chain.then(function () { return DB.get('guide:' + n); }).then(function (part) { for (var k in part) g.packed[k] = part[k]; });
+            })(i);
+            return chain.then(function () { delete g.parts; return g; });
+        });
+    }
+
     function init() {
-        return Promise.all(playlists.map(function (p) {
-            return DB.get('content:' + p.id).then(function (c) { if (c) contents[p.id] = c; });
-        })).then(function () {
-            return DB.get('guide').then(function (g) { if (g) guide = g; });
-        }).then(function () {
+        // Channels first so the screens can draw; the guide follows in its own step.
+        var chain = Promise.resolve();
+        playlists.forEach(function (p) { chain = chain.then(function () { return loadContent(p.id); }).then(function (c) { if (c) contents[p.id] = c; }); });
+        return chain.then(function () {
             rebuild();
+            return loadGuide().then(function (g) { if (g) { setGuide(g); changed('guide'); } });
+        }).then(function () {
             refreshIfStale();
             setInterval(checkReminders, 20000);
         });
@@ -604,7 +454,7 @@ var IPTV = (function () {
             if (pl.enabled && (!contents[pl.id] || !pl.lastRefresh || Date.now() - pl.lastRefresh > 12 * 3600000)) p = p.then(function () { return refresh(pl.id, true); });
         });
         return p.then(function () {
-            if (!guide.updated || Date.now() - guide.updated > 6 * 3600000 || !Object.keys(guide.programmes).length) return refreshGuide();
+            if (!guide.updated || Date.now() - guide.updated > 6 * 3600000 || !guide.count) return refreshGuide();
         });
     }
 
@@ -612,13 +462,9 @@ var IPTV = (function () {
         var pl = playlist(id);
         if (!pl || loading[id]) return Promise.resolve();
         loading[id] = true; delete errors[id]; changed('loading');
-        var job = pl.kind === 'xtream' ? Xtream(pl).load() : getText(pl.url.trim(), pl.userAgent).then(function (text) {
-            if (text.indexOf('#EXTINF') < 0 && text.indexOf('#EXTM3U') < 0) throw new Error('This address didn\'t return an M3U playlist.');
-            return parseM3U(text, pl);
-        });
+        var job = pl.kind === 'xtream' ? Xtream(pl).load() : work('m3u', { pl: { id: pl.id }, sources: [{ url: pl.url.trim(), ua: pl.userAgent || null }] });
         return job.then(function (c) {
             contents[id] = c;
-            DB.set('content:' + id, c);
             pl.lastRefresh = Date.now();
             pref('playlists', playlists);
             delete loading[id];
@@ -649,40 +495,38 @@ var IPTV = (function () {
         });
         if (!urls.length) return Promise.resolve();
         guideLoading = true; changed('guide');
-        var all = [];
-        Object.keys(contents).forEach(function (k) { all = all.concat(contents[k].channels); });
-        var ids = {}, names = {}, maxDays = 1;
-        all.forEach(function (c) { if (c.epgID) ids[c.epgID.toLowerCase()] = 1; names[key(c.name)] = 1; if (c.catchup && c.catchup.days > maxDays) maxDays = c.catchup.days; });
-        var from = Date.now() - Math.min(maxDays, 14) * 86400000, to = Date.now() + 4 * 86400000;
-        var merged = { programmes: {}, names: {}, icons: {} };
-        var chain = Promise.resolve();
-        urls.forEach(function (x) {
-            chain = chain.then(function () {
-                return getText(x.u, x.ua).then(function (text) {
-                    var g = parseXMLTV(text, ids, names, from, to);
-                    Object.keys(g.programmes).forEach(function (k) { if (!merged.programmes[k]) merged.programmes[k] = g.programmes[k]; });
-                    Object.keys(g.names).forEach(function (k) { if (!merged.names[k]) merged.names[k] = g.names[k]; });
-                    Object.keys(g.icons).forEach(function (k) { if (!merged.icons[k]) merged.icons[k] = g.icons[k]; });
-                }).catch(function (e) { Util.toast('Guide: ' + (e.message || e)); });
-            });
+        var ids = {}, chNames = [], maxDays = 1;
+        Object.keys(contents).forEach(function (k) {
+            contents[k].channels.forEach(function (c) { if (c.epgID) ids[c.epgID.toLowerCase()] = 1; chNames.push(c.name); if (c.catchup && c.catchup.days > maxDays) maxDays = c.catchup.days; });
         });
-        return chain.then(function () {
+        var from = Date.now() - Math.min(maxDays, 14) * 86400000, to = Date.now() + 4 * 86400000;
+        // The worker downloads each guide and scans it piece by piece, keeping only our channels and the needed days.
+        return work('guide', { sources: urls.map(function (x) { return { url: x.u, ua: x.ua || null }; }), ids: ids, chNames: chNames, from: from, to: to }).then(function (g) {
+            (g.errors || []).forEach(function (e) { Util.toast('Guide: ' + e); });
+            if (g.count) setGuide({ packed: g.packed, names: g.names, icons: g.icons, updated: g.updated });
+        }, function (e) { Util.toast('Guide: ' + (e.message || e)); }).then(function () {
             guideLoading = false;
-            if (Object.keys(merged.programmes).length) {
-                merged.updated = Date.now();
-                guide = merged;
-                keyCache = {};
-                DB.set('guide', guide);
-            }
             changed('guide');
         });
     }
 
+    function hasProgs(k) { return guide.packed[k] !== undefined; }
+    function progsOf(k) {
+        if (!k) return [];
+        var l = unpacked[k];
+        if (l) return l;
+        var s = guide.packed[k];
+        if (!s) return [];
+        try { l = JSON.parse(s); } catch (e) { l = []; }
+        unpacked[k] = l;
+        return l;
+    }
+
     function epgKey(ch) {
         if (keyCache[ch.id] !== undefined) return keyCache[ch.id];
-        var k = null, id = ch.epgID && ch.epgID.toLowerCase();
-        if (id && guide.programmes[id]) k = id;
-        else if (guide.names[key(ch.name)] && guide.programmes[guide.names[key(ch.name)]]) k = guide.names[key(ch.name)];
+        var k = null, id = ch.epgID && ch.epgID.toLowerCase(), nk;
+        if (id && hasProgs(id)) k = id;
+        else if ((nk = guide.names[key(ch.name)]) && hasProgs(nk)) k = nk;
         else {
             var orig = state.renames[ch.id] ? (((contents[ch.playlistID] || {}).channels || []).filter(function (c) { return c.id === ch.id; })[0]) : null;
             if (orig && guide.names[key(orig.name)]) k = guide.names[key(orig.name)];
@@ -722,7 +566,7 @@ var IPTV = (function () {
     }
 
     function programmes(ch, from, to) {
-        var k = epgKey(ch), list = (k && guide.programmes[k]) || [];
+        var list = progsOf(epgKey(ch));
         if (from == null) return list;
         return list.filter(function (p) { return p.end > from && p.start < to; });
     }
@@ -771,8 +615,8 @@ var IPTV = (function () {
     function trendingChannels() {
         var since = Date.now() - 7 * 86400000;
         return Object.keys(state.plays).map(function (k) { return [k, state.plays[k].filter(function (t) { return t > since; }).length]; })
-            .filter(function (x) { return x[1] > 0 && visible.byID[x[0]]; })
-            .sort(function (a, b) { return b[1] - a[1]; }).slice(0, 20).map(function (x) { return visible.byID[x[0]]; });
+            .filter(function (x) { return x[1] > 0 && byID('channels')[x[0]]; })
+            .sort(function (a, b) { return b[1] - a[1]; }).slice(0, 20).map(function (x) { return byID('channels')[x[0]]; });
     }
 
     function savePosition(id, ms, durationMs) {
@@ -794,9 +638,8 @@ var IPTV = (function () {
     }
 
     function continueEntries() {
-        var m = {}, s = {};
-        visible.movies.forEach(function (x) { m[x.id] = x; });
-        visible.series.forEach(function (x) { s[x.id] = x; });
+        if (!state.resume.length) return [];
+        var m = byID('movies'), s = byID('series');
         return state.resume.filter(function (r) { return r.movieID ? (m[r.movieID] && state.positions[r.id]) : !!s[r.seriesID]; });
     }
 
@@ -816,7 +659,16 @@ var IPTV = (function () {
             .replace(/[\(\[][^\)\]]*[\)\]]/g, ' ').replace(/\b(19|20)\d{2}\b/g, ' '));
     }
 
+    // Home asks for this on every visit; matching 50k films against TMDB is worth doing once per catalogue change.
+    var trendCache = null;
     function trending() {
+        if (trendCache && Date.now() - trendCache.at < 3600000) return trendCache.p;
+        var p = trendingNow();
+        trendCache = { at: Date.now(), p: p };
+        p.then(function (r) { if (!r.fromTMDB && trendCache && trendCache.p === p) trendCache.at = 0; }, function () { trendCache = null; });
+        return p;
+    }
+    function trendingNow() {
         var tmdbKey = window.Online && Online.keys ? Online.keys().tmdb : '';
         function fetchList(media) {
             if (!tmdbKey) return Promise.resolve([]);
@@ -836,6 +688,7 @@ var IPTV = (function () {
             }).catch(function () { return []; });
         }
         function match(list, wanted) {
+            if (!wanted.length) return [];
             var idx = {};
             list.forEach(function (x) { var k = cleanTitle(x.name); (idx[k] = idx[k] || []).push(x); });
             var out = [];
@@ -848,10 +701,24 @@ var IPTV = (function () {
         return Promise.all([fetchList('movie'), fetchList('tv')]).then(function (r) {
             var m = match(visible.movies, r[0]), s = match(visible.series, r[1]);
             var fromTMDB = m.length > 0 || s.length > 0;
-            if (!m.length) m = visible.movies.slice().sort(function (a, b) { return (b.added || 0) - (a.added || 0); }).slice(0, 300).sort(function (a, b) { return (b.rating || 0) - (a.rating || 0); }).slice(0, 20);
-            if (!s.length) s = visible.series.slice().sort(function (a, b) { return (b.rating || 0) - (a.rating || 0); }).slice(0, 20);
+            if (!m.length) m = top(top(visible.movies, 300, function (x) { return x.added || 0; }), 20, function (x) { return x.rating || 0; });
+            if (!s.length) s = top(visible.series, 20, function (x) { return x.rating || 0; });
             return { movies: m, series: s, fromTMDB: fromTMDB };
         });
+    }
+
+    /* The n items with the highest score, in order, without sorting the whole list (stable for equal scores). */
+    function top(list, n, score) {
+        var best = [];
+        for (var i = 0; i < list.length; i++) {
+            var v = score(list[i]);
+            if (best.length === n && v <= best[n - 1][0]) continue;
+            var j = best.length;
+            while (j > 0 && best[j - 1][0] < v) j--;
+            best.splice(j, 0, [v, list[i]]);
+            if (best.length > n) best.pop();
+        }
+        return best.map(function (x) { return x[1]; });
     }
 
     /* ---------- reminders ---------- */
@@ -886,18 +753,27 @@ var IPTV = (function () {
             r.movies = visible.movies.filter(function (m) { return match(m.name); }).slice(0, 80);
             r.series = visible.series.filter(function (s) { return match(s.name); }).slice(0, 80);
         }
-        var now = Date.now(), seen = {}, out = [];
+        var now = Date.now(), seen = {}, out = [], re = mentions(q);
         for (var i = 0; i < pool.length && out.length < 300; i++) {
             var k = epgKey(pool[i]);
             if (!k || seen[k]) continue;
             seen[k] = 1;
-            (guide.programmes[k] || []).forEach(function (p) {
+            if (!re(k)) continue;
+            progsOf(k).forEach(function (p) {
                 if (p.end > now && p.start < now + 2 * 86400000 && (match(p.title) || match(p.category) || match(p.episode))) out.push({ channel: pool[i], programme: p });
             });
         }
         r.programmes = out.sort(function (a, b) { return a.programme.start - b.programme.start; }).slice(0, 80);
         return r;
     }
+
+    /* A quick test on a channel's packed guide text, so a search only unpacks channels that can match. */
+    function mentions(q) {
+        var re = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        return function (k) { var s = guide.packed[k]; return s === '' || s === undefined ? !!unpacked[k] : re.test(s); };
+    }
+    // guideMentions(q)(ch): could the channel's guide hold q? (false means it certainly doesn't)
+    function guideMentions(q) { var m = mentions(q); return function (ch) { var k = epgKey(ch); return !!k && m(k); }; }
 
     /* ---------- playlists ---------- */
 
@@ -914,6 +790,7 @@ var IPTV = (function () {
         playlists = playlists.filter(function (p) { return p.id !== id; });
         delete contents[id];
         DB.set('content:' + id, null);
+        P.save([], 'content:' + id + ':');
         pref('playlists', playlists);
         rebuild();
     }
@@ -925,14 +802,12 @@ var IPTV = (function () {
         setEnabled: function (id, on) { var p = playlist(id); if (p) { p.enabled = on; pref('playlists', playlists); rebuild(); } },
         loading: function (id) { return id ? !!loading[id] : Object.keys(loading).length > 0; }, error: function (id) { return errors[id]; },
         guideLoading: function () { return guideLoading; }, guideUpdated: function () { return guide.updated; },
-        hasGuide: function () { return Object.keys(guide.programmes).length > 0; },
+        hasGuide: function () { return guide.count > 0; }, guideMentions: guideMentions,
         channels: function () { return visible.channels; }, movies: function () { return visible.movies; }, series: function () { return visible.series; },
-        channel: function (id) { return visible.byID[id]; }, logo: logo, logoHtml: logoHtml,
+        channel: function (id) { return byID('channels')[id]; }, logo: logo, logoHtml: logoHtml,
         groups: groups,
-        inGroup: function (kind, g) {
-            var l = kind === 'live' ? visible.channels : kind === 'movie' ? visible.movies : visible.series;
-            return l.filter(function (x) { return x.playlistID === g.playlistID && x.group === g.name; });
-        },
+        inGroup: function (kind, g) { return visible.byGroup[groupKey(g.playlistID, kind, g.name)] || []; },
+        movie: function (id) { return byID('movies')[id]; }, seriesItem: function (id) { return byID('series')[id]; },
         isHidden: function (g) { return state.hidden.indexOf(g.id) >= 0; },
         isLocked: function (g) { return state.locked.indexOf(g.id) >= 0; },
         setHidden: function (g, on) { toggleIn('hidden', g.id, on); rebuild(); },
@@ -941,12 +816,12 @@ var IPTV = (function () {
         unlocked: function () { return state.unlocked; },
         unlock: function (p) { if (p !== state.pin) return false; state.unlocked = true; rebuild(); return true; },
         lock: function () { state.unlocked = false; rebuild(); },
-        isFavorite: function (id) { return state.favorites.indexOf(id) >= 0; },
-        toggleFavorite: function (id) { toggleIn('favorites', id); changed('favorites'); },
-        favoriteChannels: function () { return state.favorites.map(function (id) { return visible.byID[id]; }).filter(Boolean); },
-        favoriteMovies: function () { return visible.movies.filter(function (m) { return state.favorites.indexOf(m.id) >= 0; }); },
-        favoriteSeries: function () { return visible.series.filter(function (m) { return state.favorites.indexOf(m.id) >= 0; }); },
-        recentChannels: function () { return state.recents.map(function (id) { return visible.byID[id]; }).filter(Boolean); },
+        isFavorite: function (id) { return favSet[id] === 1; },
+        toggleFavorite: function (id) { toggleIn('favorites', id); indexFavorites(); changed('favorites'); },
+        favoriteChannels: function () { return state.favorites.map(function (id) { return byID('channels')[id]; }).filter(Boolean); },
+        favoriteMovies: function () { return state.favorites.map(function (id) { return byID('movies')[id]; }).filter(Boolean); },
+        favoriteSeries: function () { return state.favorites.map(function (id) { return byID('series')[id]; }).filter(Boolean); },
+        recentChannels: function () { return state.recents.map(function (id) { return byID('channels')[id]; }).filter(Boolean); },
         clearRecents: function () { state.recents = []; pref('recents', []); },
         played: played, trendingChannels: trendingChannels, trending: trending,
         rename: function (ch, name) { if (name && name.trim()) state.renames[ch.id] = name.trim(); else delete state.renames[ch.id]; pref('renames', state.renames); rebuild(); },
@@ -957,6 +832,6 @@ var IPTV = (function () {
         hasReminder: hasReminder, toggleReminder: toggleReminder, reminders: function () { return state.reminders; },
         tags: tags, TAGS: TAGS, recordMeasured: recordMeasured, search: search,
         // exposed for tests
-        _parseM3U: parseM3U, _parseXMLTV: parseXMLTV, _fill: fill, _parseTags: parseTags, _xmltvDate: xmltvDate
+        _parseM3U: P.parseM3U, _parseXMLTV: P.parseXMLTV, _fill: fill, _parseTags: parseTags, _xmltvDate: P.xmltvDate
     };
 })();

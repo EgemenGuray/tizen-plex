@@ -620,6 +620,9 @@ body.playing #toast { background: rgba(28,28,32,.88); }
 .iptv-col.channels.wide { height: 760px; margin: 0 120px; }
 .iptv-col.preview { width: 560px; flex: 0 0 560px; overflow: visible; }
 .iptv-col .page { padding: 10px 10px 300px; -webkit-animation: none; animation: none; }
+/* Long lists keep only the rows near the focus; each row sits at its own place in a box as tall as the whole list. */
+.vlist { position: relative; }
+.vrow { position: absolute; left: 0; right: 0; }
 .pv-box { width: 560px; height: 315px; border-radius: 14px; background: #121216; box-shadow: 0 0 0 1px rgba(255,255,255,.08); }
 body.iptv-preview, body.iptv-preview html { background: transparent; }
 body.iptv-preview #backdrop { display: none; }

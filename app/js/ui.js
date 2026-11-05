@@ -46,11 +46,23 @@ var UI = (function () {
             else if (hl._edge) hl._edge(dir);
             return;
         }
-        // Otherwise: the nearest element in the pressed direction, measured on screen.
+        // Otherwise: the nearest element in the pressed direction, measured on screen. Measuring is the costly part
+        // on the TV, so look inside the focused element's own box (.navbox: a column, a list) first and only
+        // measure the whole screen when nothing in that box lies that way.
         var a = focused.getBoundingClientRect();
+        var box = focused.closest('.navbox');
+        var best = box && scope().contains(box) ? nearest(dir, a, hl, box.querySelectorAll('.focusable')) : null;
+        if (!best) best = nearest(dir, a, hl, scope().querySelectorAll('.focusable'), box);
+        if (best) focus(best);
+    }
+
+    // The closest of `els` in direction dir from rect a, skipping the focused row and anything inside `skip`
+    // (already searched).
+    function nearest(dir, a, hl, els, skip) {
         var ax = a.left + a.width / 2, ay = a.top + a.height / 2;
         var cands = [];
-        focusables().forEach(function (el) {
+        Array.prototype.forEach.call(els, function (el) {
+            if (skip && skip.contains(el)) return;
             if (el === focused || (hl && hlistOf(el) === hl)) return;
             var b = el.getBoundingClientRect();
             if (!b.width) return;
@@ -62,7 +74,7 @@ var UI = (function () {
             else { main = dy; cross = Math.abs(dx); }
             if (main > 4) cands.push({ el: el, main: main, cross: cross });
         });
-        if (!cands.length) return;
+        if (!cands.length) return null;
         var best;
         if (dir === 'up' || dir === 'down') {
             // Up/down: go to the nearest row, then to the item in it closest to where we are.
@@ -72,7 +84,7 @@ var UI = (function () {
         } else {
             best = cands.sort(function (a, b) { return (a.main + a.cross * 3) - (b.main + b.cross * 3); })[0];
         }
-        focus(best.el);
+        return best.el;
     }
 
     /* Slide rows and the page so the focused item sits in a steady place (transforms animate on the GPU). */

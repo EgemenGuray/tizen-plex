@@ -52,6 +52,7 @@
         if (/^d\d$/.test(key)) return;
         if ((key === 'info' || key === 'green') && !UI.sheetOpen() && IPTVUI.options(UI.kit.focused())) return;
         if (key === 'info' && UI.menu()) return;
+        if ((key === 'chup' || key === 'chdown') && !UI.sheetOpen() && IPTVUI.page(UI.kit.focused(), key === 'chup' ? -1 : 1)) return;
         if (key === 'left' || key === 'right' || key === 'up' || key === 'down') UI.move(key);
         else if (key === 'enter') { if (UI.hasMenu()) holdStart(); else UI.select(); }
         else if (key === 'back' && !UI.back()) exitPress();

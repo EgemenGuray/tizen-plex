@@ -304,7 +304,7 @@ var UI = (function () {
     }
 
     /* Free text entry: the TV's own keyboard (which the SmartThings phone app can also type into), plus an on-screen
-     * keyboard laid out as a grid for typing with the remote. Shortcuts cover the usual pieces of addresses. */
+     * QWERTY keyboard laid out as a grid for typing with the remote's arrow keys. Shortcuts cover the usual pieces of addresses. */
     var nativeInput = null;
     function textEntry(title, value, cb, note) {
         var text = value || '';
@@ -320,30 +320,72 @@ var UI = (function () {
         fieldBox.appendChild(el('span', 'entry-hint', 'OK: TV keyboard'));
         fieldBox._select = function () { nativeInput = { field: field, done: function () { text = field.value; draw(); } }; field.focus(); };
         field.addEventListener('input', function () { text = field.value; });
-        /* Like Apple TV: one sliding row of characters (it wraps around at the ends), with the modes,
-         * Space, Delete and Done always one step below it. */
-        var MODES = [
-            ['abc', 'abcdefghijklmnopqrstuvwxyz.@-_/:'],
-            ['ABC', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ.@-_/:'],
-            ['123', '1234567890.:/-_@'],
-            ['#+=', '?=&%+~#!*$,;()[]\'"<>|\\^`{}']
-        ];
-        var mode = 0;
-        var strip = el('div', 'track hlist entry-strip');
-        strip._edge = function (dir) {   // wrap around
-            var ks = strip.querySelectorAll('.key');
-            focus(dir === 'right' ? ks[0] : ks[ks.length - 1]);
+        /* A QWERTY grid for the remote's arrow keys: every key is one press away from its neighbours (rows wrap
+         * at the ends). Delete sits top right as on a computer, Done bottom right, the address pieces below. */
+        var LAYERS = {
+            letters: ['1234567890', 'qwertyuiop@', 'asdfghjkl:/', 'zxcvbnm.-_'],
+            symbols: ['1234567890', '!?&%+=~#*$€', '()[]{}<>\'";', '\\|^`.,-_@:']
         };
-        function fillStrip() {
-            strip.innerHTML = '';
-            MODES[mode][1].split('').forEach(function (c) {
-                var b = el('div', 'key focusable', c);
-                b._select = function () { type(c); };
-                strip.appendChild(b);
+        var shift = false, caps = false, sym = false;
+        var kb = el('div', 'entry-kb qwerty');
+        var keyEls = [];   // [row][col] -> key whose character follows the layer
+        function row() { var r = el('div', 'entry-row hlist'); r._edge = wrap(r); kb.appendChild(r); return r; }
+        function wrap(r) {
+            return function (dir) {
+                var ks = r.querySelectorAll('.focusable');
+                focus(dir === 'right' ? ks[0] : ks[ks.length - 1]);
+            };
+        }
+        function key(r, label, cls, action) {
+            var b = el('div', 'key focusable' + (cls ? ' ' + cls : ''), label);
+            b._select = action;
+            r.appendChild(b);
+            return b;
+        }
+        function charKey(r, ri, ci) {
+            var b = key(r, '', 'ch', function () {
+                type(b.textContent);
+                if (shift && !caps) { shift = false; relabel(); }
             });
-            strip._x = 0;
-            strip.style.transform = '';
-            Array.prototype.forEach.call(kb.querySelectorAll('.k-mode'), function (m, i) { m.classList.toggle('on', i === mode); });
+            keyEls[ri] = keyEls[ri] || [];
+            keyEls[ri][ci] = b;
+        }
+        LAYERS.letters.forEach(function (chars, ri) {
+            var r = row();
+            if (ri === 3) {
+                key(r, '⇧', 'wide k-shift', function () {
+                    // One press: next letter in capitals. Again: caps lock. Again: off.
+                    if (!shift) { shift = true; caps = false; } else if (!caps) caps = true; else { shift = false; caps = false; }
+                    relabel();
+                });
+            }
+            for (var ci = 0; ci < chars.length; ci++) charKey(r, ri, ci);
+            if (ri === 0) key(r, '⌫ Delete', 'wide k-del', function () { text = text.slice(0, -1); draw(); });
+            if (ri === 3) key(r, '⌫', 'k-del2', function () { text = text.slice(0, -1); draw(); });
+        });
+        var bottom = row();
+        var symKey = key(bottom, '#+=', 'wide k-sym', function () { sym = !sym; relabel(); });
+        key(bottom, 'Space', 'wide k-space', function () { type(' '); });
+        key(bottom, 'Clear', 'wide', function () { text = ''; draw(); });
+        key(bottom, 'Done', 'wide k-done', function () { done(); });
+        var snips = row();
+        ['http://', 'https://', 'www.', '.com', '.net', '.org', ':8080', '.m3u', '.m3u8'].forEach(function (t) {
+            key(snips, t, 'wide snip', function () { type(t); });
+        });
+        function relabel() {
+            var layer = sym ? LAYERS.symbols : LAYERS.letters;
+            keyEls.forEach(function (ks, ri) {
+                ks.forEach(function (b, ci) {
+                    var c = layer[ri].charAt(ci);
+                    b.textContent = shift && !sym ? c.toUpperCase() : c;
+                });
+            });
+            var sh = kb.querySelector('.k-shift');
+            sh.classList.toggle('on', shift && !sym);
+            sh.classList.toggle('lock', caps && !sym);
+            sh.textContent = caps ? '⇪' : '⇧';
+            symKey.textContent = sym ? 'abc' : '#+=';
+            symKey.classList.toggle('on', sym);
         }
         function type(t) { text += t; draw(); }
         function draw() {
@@ -352,40 +394,14 @@ var UI = (function () {
             field.scrollLeft = field.scrollWidth;
         }
         function done() { nativeInput = null; closeSheet(); cb(text); }
-        var kb = el('div', 'entry-kb');
-        var stripView = el('div', 'entry-stripview');
-        stripView.appendChild(strip);
-        kb.appendChild(stripView);
-        var actions = el('div', 'entry-row hlist');
-        MODES.forEach(function (m, i) {
-            var b = el('div', 'key wide k-mode focusable', m[0]);
-            b._select = function () { mode = i; fillStrip(); };
-            actions.appendChild(b);
-        });
-        [['Space', function () { type(' '); }],
-         ['⌫ Delete', function () { text = text.slice(0, -1); draw(); }, 'k-del'],
-         ['Clear', function () { text = ''; draw(); }],
-         ['Done', done, 'k-done']].forEach(function (a) {
-            var b = el('div', 'key wide focusable ' + (a[2] || ''), a[0]);
-            b._select = a[1];
-            actions.appendChild(b);
-        });
-        kb.appendChild(actions);
-        var snips = el('div', 'entry-row hlist');
-        ['http://', 'https://', 'www.', '.com', '.net', '.org', ':8080', '.m3u', '.m3u8'].forEach(function (t) {
-            var b = el('div', 'key wide snip focusable', t);
-            b._select = function () { type(t); };
-            snips.appendChild(b);
-        });
-        kb.appendChild(snips);
-        fillStrip();
+        relabel();
         var foot = el('div', 'entry-wrap');
         foot.appendChild(fieldBox);
         foot.appendChild(kb);
         entry = { type: type, del: function () { text = text.slice(0, -1); draw(); }, done: done };
         openSheet(title, [], { footer: foot, wide: true, note: note, onClose: function () { nativeInput = null; entry = null; } });
         draw();
-        focus(strip.querySelector('.key'));
+        focus(keyEls[1][0]);
     }
 
     /* Remote keys while the keyboard is open: number keys type digits. */

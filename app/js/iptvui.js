@@ -13,7 +13,6 @@ var IPTVUI = (function () {
         ['favorites', 'Favorites'], ['search', 'Search'], ['downloads', 'Downloads'], ['recordings', 'Recordings'], ['playlists', 'Playlists']
     ];
     var section = Util.store('iptv.section') || 'home';
-    var MAX_ROWS = 250;
 
     function day(t) {
         var d = new Date(t), now = new Date();
@@ -184,11 +183,11 @@ var IPTVUI = (function () {
         c.appendChild(el('div', 'cap', '<div class="t">' + esc(r.title) + '</div><div class="s">' + esc(r.subtitle || '') + '</div>'));
         c._select = function () {
             if (r.movieID) {
-                var m = IPTV.movies().filter(function (x) { return x.id === r.movieID; })[0];
+                var m = IPTV.movie(r.movieID);
                 if (m) IPTVPlayer.start({ movie: m }, null, function () { K().show(); });
                 return;
             }
-            var s = IPTV.series().filter(function (x) { return x.id === r.seriesID; })[0];
+            var s = IPTV.seriesItem(r.seriesID);
             if (!s) return;
             IPTV.details('series', s).then(function (d) {
                 var all = d.episodes || [r.episode], i = -1;
@@ -220,7 +219,7 @@ var IPTVUI = (function () {
     }
 
     function column(cls) {
-        var col = el('div', 'iptv-col ' + cls);
+        var col = el('div', 'iptv-col navbox ' + cls);
         var pg = el('div', 'page');
         pg.setAttribute('data-offset', '260');
         col.appendChild(pg);
@@ -233,6 +232,63 @@ var IPTVUI = (function () {
         } else then();
     }
 
+    /* ---------- long lists ---------- */
+
+    /* A list of `count` fixed-height rows in a scrolling .page, of which only the rows near the focus are in the page.
+     * 20k channels would otherwise be 20k rows to build, lay out and measure on every key press. make(i) builds row i
+     * (a focusable row, or a row holding focusables); `before`/`after` rows around the focused one stay built so the
+     * neighbours are always there for the remote. */
+    function vlist(page, count, rowH, make, before, after) {
+        var box = el('div', 'vlist'), rows = {}, cur = 0, self = {};
+        box.style.height = count * rowH + 'px';
+        page.appendChild(box);
+        function hook(f, i) {
+            var own = f._focus;
+            f._focus = function () { at(i); if (own) own.call(f); };
+        }
+        function row(i) {
+            if (i < 0 || i >= count) return null;
+            if (rows[i]) return rows[i];
+            var r = make(i, self);
+            r.className += ' vrow';
+            r.style.top = i * rowH + 'px';
+            if (r.classList.contains('focusable')) hook(r, i);
+            Array.prototype.forEach.call(r.querySelectorAll('.focusable'), function (f) { hook(f, i); });
+            rows[i] = r;
+            box.appendChild(r);
+            return r;
+        }
+        function at(i) {
+            cur = i;
+            var a = Math.max(0, i - before), b = Math.min(count, i + after + 1);
+            Object.keys(rows).forEach(function (k) { if (k < a || k >= b) { box.removeChild(rows[k]); delete rows[k]; } });
+            for (var j = a; j < b; j++) row(j);
+        }
+        self.row = row; self.at = at; self.count = count; self.current = function () { return cur; };
+        if (count) at(0);
+        return self;
+    }
+
+    /* The item of a row (the tag pills over Live TV) straight above `from`. */
+    function above(row, from) {
+        var a = from.getBoundingClientRect(), x = a.left + a.width / 2, best = null, bd = Infinity;
+        Array.prototype.forEach.call(row.querySelectorAll('.focusable'), function (e) {
+            var b = e.getBoundingClientRect(), d = b.left <= x && b.right >= x ? 0 : Math.abs(b.left + b.width / 2 - x);
+            if (d < bd) { bd = d; best = e; }
+        });
+        return best;
+    }
+
+    /* Up, down and CH+/CH- (a page) for a one-column vlist. */
+    function listNav(r, list, i, extra) {
+        var n = extra || {};
+        n.up = n.up || function () { return list.row(i - 1); };
+        n.down = n.down || function () { return list.row(i + 1) || r; };
+        r._nav = n;
+        r._page = function (d) { K().focus(list.row(Math.max(0, Math.min(list.count - 1, i + d * 6)))); };
+        return r;
+    }
+
     function live(body) {
         var tagsRow = el('div', 'hlist iptv-tags');
         IPTV.TAGS.forEach(function (t) {
@@ -242,41 +298,69 @@ var IPTVUI = (function () {
             }, 'pill small' + (tagFilter.indexOf(t) >= 0 ? ' on' : '')));
         });
         searchBar(tagsRow, 'live', 'channels and what is on');
+        Array.prototype.forEach.call(tagsRow.children, function (b) { b._focus = leavePreview; });
         body.appendChild(tagsRow);
         var cols = el('div', 'iptv-cols');
         var gcol = column('groups'), ccol = column('channels');
         var prev = el('div', 'iptv-col preview', '<div class="pv-box"></div><div class="pv-info"></div>');
-        function groupRow(id, label, extra) {
-            var r = el('div', 'ir focusable' + (id === liveGroup ? ' on' : ''), (extra || '') + '<span class="lbl">' + esc(label) + '</span>');
-            r.setAttribute('data-id', 'g-' + id);
-            return r;
+        var gitems = [{ id: 'all', name: 'All Channels' }, { id: 'favorites', name: 'Favorites' }, { id: 'recents', name: 'Recently Watched' }]
+            .concat(IPTV.groups('live').map(function (g) { return { id: g.id, name: g.name, g: g }; }));
+        var gpos = 0;
+        gitems.forEach(function (x, i) { if (x.id === liveGroup) gpos = i; });
+        var clist = null;
+        // Picking a group redraws only the channel column; the rest of the screen stays as it is.
+        function choose(x) {
+            liveGroup = x.id; Util.store('iptv.liveGroup', liveGroup);
+            gitems.forEach(function (y, i) { if (y.id === x.id) gpos = i; });
+            Array.prototype.forEach.call(gcol.page.querySelectorAll('.ir'), function (r) { r.classList.toggle('on', r.getAttribute('data-id') === 'g-' + x.id); });
+            leavePreview();
+            channels();
         }
-        [['all', 'All Channels'], ['favorites', 'Favorites'], ['recents', 'Recently Watched']].forEach(function (x) {
-            var r = groupRow(x[0], x[1]);
-            r._select = function () { liveGroup = x[0]; Util.store('iptv.liveGroup', liveGroup); K().replace(screen, 'iptv'); };
-            gcol.page.appendChild(r);
-        });
-        IPTV.groups('live').forEach(function (g) {
-            var r = groupRow(g.id, g.name, dot(g.playlistID));
-            if (IPTV.isLocked(g)) r.appendChild(el('span', 'lock', IPTV.unlocked() ? '🔓' : '🔒'));
-            r._select = function () { pick(g, function () { liveGroup = g.id; Util.store('iptv.liveGroup', liveGroup); K().replace(screen, 'iptv'); }); };
-            r._options = function () { groupOptions(g); };
-            gcol.page.appendChild(r);
-        });
-        var f = matcher('live'), list = f ? lineup('all').filter(function (c) { var n = IPTV.nowNext(c)[0]; return f(c.name, c.group, n && n.title); }) : lineup(liveGroup);
-        if (f) ccol.page.appendChild(el('div', 'ir-h', list.length + ' channels match “' + esc(sq.live) + '”'));
-        if (!list.length) ccol.page.appendChild(el('div', 'muted pad', IPTV.loading() ? 'Loading channels…' : f ? 'No channel matches.' : 'No channels here.'));
-        list.slice(0, MAX_ROWS).forEach(function (ch) { ccol.page.appendChild(channelRow(ch, list, prev)); });
-        if (list.length > MAX_ROWS) ccol.page.appendChild(el('div', 'muted pad', (list.length - MAX_ROWS) + ' more: pick a group or search to narrow the list.'));
+        var glist = vlist(gcol.page, gitems.length, 60, function (i, gl) {
+            var x = gitems[i];
+            var r = el('div', 'ir focusable' + (x.id === liveGroup ? ' on' : ''), (x.g ? dot(x.g.playlistID) : '') + '<span class="lbl">' + esc(x.name) + '</span>');
+            r.setAttribute('data-id', 'g-' + x.id);
+            r.style.height = '60px';
+            if (x.g && IPTV.isLocked(x.g)) r.appendChild(el('span', 'lock', IPTV.unlocked() ? '🔓' : '🔒'));
+            r._select = function () { if (x.g) pick(x.g, function () { choose(x); }); else choose(x); };
+            if (x.g) r._options = function () { groupOptions(x.g); };
+            r._focus = leavePreview;
+            // Right goes to the channel list, where you were in it.
+            return listNav(r, gl, i, { up: function () { return gl.row(i - 1) || above(tagsRow, r); }, right: function () { return clist && clist.count ? clist.row(clist.current()) : null; } });
+        }, 8, 14);
+        function channels() {
+            ccol.page.innerHTML = '';
+            // Back to the top at once, not with the sliding animation (the remote measures where things are).
+            ccol.page.style.transition = 'none';
+            ccol.page.style.transform = '';
+            void ccol.page.offsetHeight;
+            ccol.page.style.transition = '';
+            var f = matcher('live'), list;
+            if (f) {
+                var mention = IPTV.guideMentions((sq.live || '').trim());
+                list = lineup('all').filter(function (c) {
+                    if (f(c.name, c.group)) return true;
+                    if (!mention(c)) return false;
+                    var n = IPTV.nowNext(c)[0];
+                    return !!n && f(n.title);
+                });
+                ccol.page.appendChild(el('div', 'ir-h', list.length + ' channels match “' + esc(sq.live) + '”'));
+            } else list = lineup(liveGroup);
+            if (!list.length) ccol.page.appendChild(el('div', 'muted pad', IPTV.loading() ? 'Loading channels…' : f ? 'No channel matches.' : 'No channels here.'));
+            clist = vlist(ccol.page, list.length, 98, function (i, cl) {
+                var r = channelRow(list[i], list, prev);
+                r.style.height = '98px';
+                return listNav(r, cl, i, { up: function () { return cl.row(i - 1) || above(tagsRow, r); }, left: function () { return glist.row(gpos); }, right: function () { return r; } });
+            }, 5, 9);
+        }
+        channels();
         cols.appendChild(gcol.col); cols.appendChild(ccol.col); cols.appendChild(prev);
-        // Left and right jump between the group list and the channel list.
-        Array.prototype.forEach.call(gcol.page.children, function (r) { r._nav = { right: function () { return ccol.page.querySelector('.focusable'); } }; });
-        Array.prototype.forEach.call(ccol.page.children, function (r) {
-            r._nav = { left: function () { return gcol.page.querySelector('.ir.on') || gcol.page.querySelector('.focusable'); }, right: function () { return r; } };
-        });
         body.appendChild(cols);
-        body.appendChild(el('div', 'iptv-hint', '<b>OK</b> Watch  <b>INFO</b> or <i class="key-g"></i> Options (favourite, rename, record, hide, lock)'));
+        body.appendChild(el('div', 'iptv-hint', '<b>OK</b> Watch  <b>CH ▲▼</b> Page  <b>INFO</b> or <i class="key-g"></i> Options (favourite, rename, record, hide, lock)'));
     }
+
+    /* The preview plays only while a channel row has the focus. */
+    function leavePreview() { clearTimeout(previewTimer); IPTVPlayer.stopPreview(); }
 
     var previewTimer = null;
     function channelRow(ch, list, prev) {
@@ -287,17 +371,20 @@ var IPTVUI = (function () {
             '<span class="lbl">' + dot(ch.playlistID) + esc(ch.name) + ' ' + tagsHtml(ch) + (IPTV.isFavorite(ch.id) ? ' <i class="star">★</i>' : '') +
             (ch.catchup ? ' <i class="cu">⟲</i>' : '') + (IPTVRec.recordingOf(ch) ? ' <i class="rec">●</i>' : '') +
             '<small>' + (now ? esc(now.title) + '<span class="pbar"><i style="width:' + pct + '%"></i></span>' : '') + '</small></span>');
-        r._select = function () { IPTVPlayer.stopPreview(); playLive(ch, list); };
+        r._select = function () { leavePreview(); playLive(ch, list); };
         r._options = function () { channelOptions(ch); };
         if (prev) r._focus = function () {
             var info = prev.querySelector('.pv-info');
             info.innerHTML = IPTV.logoHtml(ch, 'pvlogo') + '<div class="t">' + esc(ch.name) + ' ' + tagsHtml(ch) + '</div>' +
                 (now ? '<div class="p">' + esc(now.title) + '</div><div class="s">' + clock(now.start) + ' – ' + clock(now.end) + '</div>' + (now.desc ? '<div class="d">' + esc(now.desc) + '</div>' : '') : '') +
                 (nn[1] ? '<div class="s">Next ' + clock(nn[1].start) + '  ' + esc(nn[1].title) + '</div>' : '');
+            // Start the preview only once the focus settles, and drop the one playing while scrolling on.
             clearTimeout(previewTimer);
+            if (IPTVPlayer.previewing() && IPTVPlayer.previewing().id !== ch.id) IPTVPlayer.stopPreview();
             previewTimer = setTimeout(function () {
+                if (!document.body.contains(r) || K().focused() !== r) return;
                 var box = prev.querySelector('.pv-box').getBoundingClientRect();
-                if (box.width && document.body.contains(prev)) IPTVPlayer.startPreview(ch, [Math.round(box.left), Math.round(box.top), Math.round(box.width), Math.round(box.height)]);
+                if (box.width) IPTVPlayer.startPreview(ch, [Math.round(box.left), Math.round(box.top), Math.round(box.width), Math.round(box.height)]);
             }, 900);
         };
         return r;
@@ -362,7 +449,7 @@ var IPTVUI = (function () {
         ruler.style.paddingLeft = CHW + 'px';
         for (var i = 0; i < HOURS * 2; i++) ruler.appendChild(el('span', '', clock(guideStart + i * 1800000)));
         body.appendChild(ruler);
-        var wrap = el('div', 'iptv-col guide');
+        var wrap = el('div', 'iptv-col guide navbox');
         var pg = el('div', 'page');
         pg.setAttribute('data-offset', '200');
         var chans = guideGroup === 'all' ? IPTV.channels() : guideGroup === 'favorites' ? IPTV.favoriteChannels() :
@@ -370,8 +457,9 @@ var IPTVUI = (function () {
         var gf = matcher('guide');
         if (gf) {
             // Channels whose name matches, or that show a matching programme within a day of the guide's start.
+            var gm = IPTV.guideMentions((sq.guide || '').trim());
             chans = IPTV.channels().filter(function (ch) {
-                return gf(ch.name) || IPTV.programmes(ch, guideStart, guideStart + 86400000).some(function (p) { return gf(p.title, p.episode, p.category); });
+                return gf(ch.name) || (gm(ch) && IPTV.programmes(ch, guideStart, guideStart + 86400000).some(function (p) { return gf(p.title, p.episode, p.category); }));
             });
             if (!chans.length) return noMatch(body, 'guide');
         }
@@ -379,8 +467,11 @@ var IPTVUI = (function () {
         if (now > guideStart && now < end) {
             var line = el('div', 'g-now'); line.style.left = (CHW + (now - guideStart) / 3600000 * HOUR) + 'px'; wrap.appendChild(line);
         }
-        chans.slice(0, 150).forEach(function (ch) {
+        // Every channel, but only the rows near the focus are built (up and down find their neighbours on screen).
+        vlist(pg, chans.length, 82, function (i, list) {
+            var ch = chans[i];
             var row = el('div', 'g-row');
+            row.style.height = '76px';
             row.appendChild(el('div', 'g-ch', IPTV.logoHtml(ch, 'logo') + '<span>' + esc(ch.name) + '</span>'));
             var cells = el('div', 'g-cells hlist');
             var cursor = guideStart, any = false;
@@ -400,10 +491,24 @@ var IPTVUI = (function () {
             });
             if (!any) { var none = el('div', 'g-cell empty focusable', esc(ch.name)); none.style.width = (HOURS * HOUR - 6) + 'px'; none._select = function () { playLive(ch, chans); }; cells.appendChild(none); }
             row.appendChild(cells);
-            pg.appendChild(row);
-        });
+            Array.prototype.forEach.call(cells.children, function (c) { c._page = function (d) { guidePage(list, i, c, d); }; });
+            return row;
+        }, 4, 10);
         wrap.appendChild(pg);
         body.appendChild(wrap);
+    }
+
+    /* CH+/CH-: a screenful of channels up or down, keeping the time position. */
+    function guidePage(list, i, c, d) {
+        var a = c.getBoundingClientRect(), x = a.left + a.width / 2;
+        var t = Math.max(0, Math.min(list.count - 1, i + d * 7));
+        list.at(t);
+        var best = null, bd = Infinity;
+        Array.prototype.forEach.call(list.row(t).querySelectorAll('.focusable'), function (e) {
+            var b = e.getBoundingClientRect(), dd = b.left <= x && b.right >= x ? 0 : Math.abs(b.left + b.width / 2 - x);
+            if (dd < bd) { bd = dd; best = e; }
+        });
+        if (best) K().focus(best);
     }
 
     function gap(w) { var g = el('div', 'g-gap'); g.style.width = w + 'px'; return g; }
@@ -464,27 +569,53 @@ var IPTVUI = (function () {
             st.group === 'all' ? all : st.group === 'favorites' ? all.filter(function (x) { return IPTV.isFavorite(x.id); }) :
             (function () { var g = groups.filter(function (x) { return x.id === st.group; })[0]; return g ? IPTV.inGroup(kind, g) : all; })();
         if (lf && !list.length) return noMatch(body, sec);
-        list = list.slice();
-        if (st.sort === 'name') list.sort(function (a, b) { return a.name.localeCompare(b.name); });
-        else if (st.sort === 'rating') list.sort(function (a, b) { return (b.rating || 0) - (a.rating || 0); });
-        else if (st.sort === 'year') list.sort(function (a, b) { return (b.year || 0) - (a.year || 0); });
-        else if (kind === 'movie') list.sort(function (a, b) { return (b.added || 0) - (a.added || 0); });
+        list = sorted(list, st.sort, kind);
         if (kind === 'movie' && st.group === 'all' && !lf) {
             var resume = IPTV.continueEntries().filter(function (r) { return r.movieID; });
             if (resume.length) body.appendChild(shelf('Continue Watching', null, resume.map(resumeCard)));
         }
         if (!list.length) body.appendChild(el('div', 'iptv-empty', '<p>' + (IPTV.loading() ? 'Loading…' : 'Nothing here.') + '</p>'));
-        grid(body, list.slice(0, 300), function (x) { return poster(x, kind); });
-        if (list.length > 300) body.appendChild(el('div', 'muted pad', (list.length - 300) + ' more: pick a group, change the sort or search.'));
+        grid(body, list, function (x) { return poster(x, kind); });
     }
 
+    /* Sorting 50k films takes a while on the TV: the last few orders are kept until the catalogue changes. */
+    var sortCache = [], collator = window.Intl && Intl.Collator ? new Intl.Collator() : null;
+    function sorted(list, sort, kind) {
+        if (sort === 'added' && kind !== 'movie') return list;
+        for (var i = 0; i < sortCache.length; i++) if (sortCache[i].src === list && sortCache[i].sort === sort) return sortCache[i].out;
+        var out = list.slice();
+        if (sort === 'name') out.sort(collator ? function (a, b) { return collator.compare(a.name, b.name); } : function (a, b) { return a.name.localeCompare(b.name); });
+        else if (sort === 'rating') out.sort(function (a, b) { return (b.rating || 0) - (a.rating || 0); });
+        else if (sort === 'year') out.sort(function (a, b) { return (b.year || 0) - (a.year || 0); });
+        else out.sort(function (a, b) { return (b.added || 0) - (a.added || 0); });
+        sortCache.unshift({ src: list, sort: sort, out: out });
+        sortCache.length = Math.min(sortCache.length, 4);
+        return out;
+    }
+
+    /* Posters six to a row. All of them are reachable, but only the rows near the focus are built. */
+    var GRID_ROW = 472;
     function grid(body, items, make) {
-        for (var i = 0; i < items.length; i += 6) {
+        var rows = Math.ceil(items.length / 6);
+        if (!rows) return;
+        var holder = el('div', 'iptv-gridbox navbox');
+        body.appendChild(holder);
+        vlist(holder, rows, GRID_ROW, function (i, list) {
             var row = el('div', 'hlist iptv-grid');
             row.setAttribute('data-anchor', '');
-            items.slice(i, i + 6).forEach(function (x) { row.appendChild(make(x)); });
-            body.appendChild(row);
-        }
+            row.style.height = GRID_ROW + 'px';
+            items.slice(i * 6, i * 6 + 6).forEach(function (x, col) {
+                var c = make(x);
+                // Up and down keep the column; past the first row the screen's own search takes over.
+                c._nav = {
+                    up: function () { var r = list.row(i - 1); return r && r.children[Math.min(col, r.children.length - 1)]; },
+                    down: function () { var r = list.row(i + 1); return r ? r.children[Math.min(col, r.children.length - 1)] : c; }
+                };
+                c._page = function (d) { var r = list.row(Math.max(0, Math.min(rows - 1, i + d * 2))); if (r) K().focus(r.children[Math.min(col, r.children.length - 1)]); };
+                row.appendChild(c);
+            });
+            return row;
+        }, 2, 3);
     }
 
     function detailFrame(page, img) {
@@ -572,7 +703,7 @@ var IPTVUI = (function () {
             if (ff) { chans = chans.filter(function (c) { var n = IPTV.nowNext(c)[0]; return ff(c.name, c.group, n && n.title); }); if (!chans.length) return noMatch(body, 'favorites'); }
             if (!chans.length) return body.appendChild(el('div', 'iptv-empty', '<p>No favourite channels yet. Press INFO on a channel and choose Add to Favorites.</p>'));
             var col = column('channels wide');
-            chans.forEach(function (c) { col.page.appendChild(channelRow(c, chans, null)); });
+            vlist(col.page, chans.length, 98, function (i, list) { var r = channelRow(chans[i], chans, null); r.style.height = '98px'; return listNav(r, list, i); }, 5, 10);
             body.appendChild(col.col);
         } else {
             var items = favTab === 'movies' ? IPTV.favoriteMovies() : IPTV.favoriteSeries();
@@ -740,5 +871,7 @@ var IPTVUI = (function () {
         draw();
     }
 
-    return { _movie: function (p, m) { return movieScreen(p, m); }, _series: function (p, s) { return seriesScreen(p, s); }, screen: screen, options: function (f) { if (f && f._options) { f._options(); return true; } return false; } };
+    return { _movie: function (p, m) { return movieScreen(p, m); }, _series: function (p, s) { return seriesScreen(p, s); }, screen: screen, options: function (f) { if (f && f._options) { f._options(); return true; } return false; },
+        // CH+/CH- in long lists: a page at a time (dir -1 or 1).
+        page: function (f, dir) { if (f && f._page) { f._page(dir); return true; } return false; } };
 })();

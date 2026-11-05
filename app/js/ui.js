@@ -274,7 +274,7 @@ var UI = (function () {
         cardEl.appendChild(view);
         if (opts.footer) cardEl.appendChild(opts.footer);
         host.appendChild(cardEl);
-        host.classList.remove('hidden');
+        host.className = opts.host || '';   // also shows it
         sheet = { el: cardEl, prev: focused, onClose: opts.onClose };
         if (focused) focused.classList.remove('focused');
         focused = null;
@@ -303,154 +303,304 @@ var UI = (function () {
         }), { note: note });
     }
 
-    /* Free text entry: the TV's own keyboard (which the SmartThings phone app can also type into), plus an on-screen
-     * QWERTY keyboard laid out as a grid for typing with the remote's arrow keys. Shortcuts cover the usual pieces of addresses. */
-    var nativeInput = null;
-    function textEntry(title, value, cb, note) {
-        var text = value || '';
+    /* ---------- on-screen keyboard ---------- */
+
+    /* Free text entry, Apple TV style: a large input display over an even 10-column QWERTY grid made for the remote's
+     * arrow keys. The columns line up, so Up/Down keep their column (the wide keys of the action row remember where you
+     * came from) and Left/Right wrap within a row. OK on the input display opens the TV's own keyboard, which the
+     * SmartThings phone app can also type into. Address fields get a row of URL pieces, number fields a big keypad.
+     * The keys are built once per open; moving the focus only moves a class.
+     * opts (optional): { kind: 'text' | 'url' | 'secret' | 'number', live: fn(text) on every change (Back undoes it),
+     *                    placeholder, dock: true to sit on the left so live results stay visible beside it } */
+    var nativeInput = null;   // the TV keyboard while it is open: { field, submit, close }
+    var entry = null;         // the open on-screen keyboard: { card, type, del, numeric }
+
+    var KB_LAYERS = {
+        letters: ['qwertyuiop', 'asdfghjkl\'', 'zxcvbnm.-_'],
+        url: ['qwertyuiop', 'asdfghjkl/', 'zxcvbnm.-_'],
+        symbols: ['!?&%+=~#*$', '()[]{}<>"\'', '@:/\\|^`,;€']
+    };
+    var KB_CHIPS = [['http://', 'https://', '.com', '.net', '.tv', ':8080'], ['/', ':', '@', '/get.php?username=', '&password=']];
+
+    // What a field holds, from its title, for the call sites that don't say.
+    function entryKind(title, value) {
+        var t = String(title || '');
+        if (/password|passcode/i.test(t)) return 'secret';
+        if (/^(search|rename)\b/i.test(t)) return 'text';
+        if (/\bport\b|\bnumber\b/i.test(t)) return 'number';
+        if (/address|\burl\b|server|playlist|guide|epg|m3u|\bhost\b/i.test(t) || /^https?:\/\//i.test(value || '')) return 'url';
+        return 'text';
+    }
+
+    function textEntry(title, value, cb, note, opts) {
+        opts = opts || {};
+        var fromSheet = !!sheet;   // a form on a sheet (Add Playlist) is replaced by the keyboard
+        keyboard(title, value || '', note, {
+            kind: opts.kind || entryKind(title, value), live: opts.live, placeholder: opts.placeholder, dock: opts.dock,
+            onDone: cb,
+            onCancel: function (original, text) {
+                if (opts.live && text !== original) opts.live(original);
+                if (fromSheet) cb(original);   // bring the form back as it was
+            }
+        });
+    }
+
+    // Number pad for PINs: four digits, sent as soon as the fourth is in.
+    function pinPad(title, cb) {
+        keyboard(title, '', null, { kind: 'pin', max: 4, autoSubmit: true, onDone: cb, onCancel: function () {} });
+    }
+
+    function keyboard(title, value, note, o) {
+        var kind = o.kind, pin = kind === 'pin', numeric = pin || kind === 'number', secret = pin || kind === 'secret';
+        var original = value, text = numeric ? value.replace(/\D/g, '') : value;
+        var submitted = false, closed = false;
+        var rows = [];    // navigation: rows of { el, c, w } in grid columns; row 0 is the input display
+        var cols = numeric ? 3 : 10;
+        var col = 0;      // the column Up/Down aim for: the centre of the last key reached sideways
+        var shift = false, caps = false, sym = false;
+        var me;
+
+        var wrap = el('div', 'kb' + (numeric ? ' kb-num' : '') + (pin ? ' kb-pin' : '') + (secret ? ' kb-secret' : ''));
+
+        /* The input display. The flex line keeps the end of long text in view: once it overflows, the start is cut. */
         var field = document.createElement('input');
-        field.type = 'text';
-        field.className = 'entry-native';
+        field.type = secret ? 'password' : 'text';
+        field.className = 'kb-native';
         field.setAttribute('autocomplete', 'off');
         field.setAttribute('autocapitalize', 'off');
         field.setAttribute('spellcheck', 'false');
-        field.value = text;
-        var fieldBox = el('div', 'entry-field focusable');
-        fieldBox.appendChild(field);
-        fieldBox.appendChild(el('span', 'entry-hint', 'OK: TV keyboard'));
-        fieldBox._select = function () { nativeInput = { field: field, done: function () { text = field.value; draw(); } }; field.focus(); };
-        field.addEventListener('input', function () { text = field.value; });
-        /* A QWERTY grid for the remote's arrow keys: every key is one press away from its neighbours (rows wrap
-         * at the ends). Delete sits top right as on a computer, Done bottom right, the address pieces below. */
-        var LAYERS = {
-            letters: ['1234567890', 'qwertyuiop@', 'asdfghjkl:/', 'zxcvbnm.-_'],
-            symbols: ['1234567890', '!?&%+=~#*$€', '()[]{}<>\'";', '\\|^`.,-_@:']
-        };
-        var shift = false, caps = false, sym = false;
-        var kb = el('div', 'entry-kb qwerty');
-        var keyEls = [];   // [row][col] -> key whose character follows the layer
-        function row() { var r = el('div', 'entry-row hlist'); r._edge = wrap(r); kb.appendChild(r); return r; }
-        function wrap(r) {
-            return function (dir) {
-                var ks = r.querySelectorAll('.focusable');
-                focus(dir === 'right' ? ks[0] : ks[ks.length - 1]);
-            };
-        }
-        function key(r, label, cls, action) {
-            var b = el('div', 'key focusable' + (cls ? ' ' + cls : ''), label);
-            b._select = action;
-            r.appendChild(b);
+        if (numeric) field.setAttribute('inputmode', 'numeric');
+        if (o.max) field.maxLength = o.max;
+        var disp = el('div', 'kb-display focusable');
+        var line = el('div', 'kb-line');
+        var val = el('span', 'kb-val');
+        var ph = el('span', 'kb-ph', Util.esc(o.placeholder || (kind === 'url' ? 'http://server:port' : numeric ? '' : 'Type with the remote')));
+        line.appendChild(val);
+        line.appendChild(el('i', 'kb-caret'));
+        line.appendChild(ph);
+        line.appendChild(el('i', 'kb-fill'));
+        disp.appendChild(line);
+        disp.appendChild(field);
+        if (!pin) disp.appendChild(el('span', 'kb-hint', 'OK  TV keyboard'));
+        disp._select = openIme;
+        wrap.appendChild(disp);
+        cell(0, disp, 0, cols);
+
+        var grid = el('div', 'kb-grid');
+        wrap.appendChild(grid);
+        var letterKeys = [];   // the 30 keys that change with shift and the symbols page
+        var shiftKey = null, symKey = null;
+
+        function key(parent, r, c, w, label, cls, action) {
+            var b = el('div', 'kb-key focusable' + (w > 1 ? ' kb-w' + w : '') + (cls ? ' ' + cls : ''), label);
+            b._select = function () { flash(b); action(b); };
+            parent.appendChild(b);
+            cell(r, b, c, w);
             return b;
         }
-        function charKey(r, ri, ci) {
-            var b = key(r, '', 'ch', function () {
-                type(b.textContent);
-                if (shift && !caps) { shift = false; relabel(); }
-            });
-            keyEls[ri] = keyEls[ri] || [];
-            keyEls[ri][ci] = b;
+        function cell(r, b, c, w) {
+            rows[r] = rows[r] || [];
+            rows[r].push({ el: b, c: c, w: w });
+            b._nav = navFor(r, rows[r].length - 1);
         }
-        LAYERS.letters.forEach(function (chars, ri) {
-            var r = row();
-            if (ri === 3) {
-                key(r, '⇧', 'wide k-shift', function () {
-                    // One press: next letter in capitals. Again: caps lock. Again: off.
-                    if (!shift) { shift = true; caps = false; } else if (!caps) caps = true; else { shift = false; caps = false; }
-                    relabel();
+
+        if (numeric) {
+            ['123', '456', '789'].forEach(function (s, ri) {
+                for (var ci = 0; ci < 3; ci++) digitKey(ri + 1, ci, s.charAt(ci));
+            });
+            key(grid, 4, 0, 1, '⌫', 'kb-act kb-del', del);
+            digitKey(4, 1, '0');
+            key(grid, 4, 2, 1, pin ? '✓' : 'Done', 'kb-done', done);
+        } else {
+            for (var d = 0; d < 10; d++) digitKey(1, d, '1234567890'.charAt(d));
+            for (var r = 0; r < 3; r++) {
+                for (var c = 0; c < 10; c++) {
+                    letterKeys.push(key(grid, r + 2, c, 1, '', 'kb-ch', function (b) {
+                        type(b.textContent);
+                        if (shift && !caps) { shift = false; relabel(); }
+                    }));
+                }
+            }
+            shiftKey = key(grid, 5, 0, 1, '⇧', 'kb-act kb-shift', function () {
+                // Once: the next letter in capitals. Twice: caps lock. Again: off.
+                if (!shift) { shift = true; caps = false; } else if (!caps) caps = true; else { shift = false; caps = false; }
+                relabel();
+            });
+            symKey = key(grid, 5, 1, 1, '#+=', 'kb-act kb-sym', function () { sym = !sym; relabel(); });
+            key(grid, 5, 2, 3, 'Space', 'kb-act kb-space', function () { type(' '); });
+            key(grid, 5, 5, 2, '⌫', 'kb-act kb-del', del);
+            key(grid, 5, 7, 1, 'Clear', 'kb-act kb-clear', function () { if (text) { text = ''; changed(); } });
+            key(grid, 5, 8, 2, 'Done', 'kb-done', done);
+            if (kind === 'url') {
+                KB_CHIPS.forEach(function (chips, i) {
+                    var rowEl = el('div', 'kb-chips');
+                    wrap.appendChild(rowEl);
+                    chips.forEach(function (t, j) {
+                        // Placed by their measured position on the first move into a chip row.
+                        key(rowEl, 6 + i, j * cols / chips.length, cols / chips.length, Util.esc(t), 'kb-chip', function () { type(t); });
+                    });
                 });
             }
-            for (var ci = 0; ci < chars.length; ci++) charKey(r, ri, ci);
-            if (ri === 0) key(r, '⌫ Delete', 'wide k-del', function () { text = text.slice(0, -1); draw(); });
-            if (ri === 3) key(r, '⌫', 'k-del2', function () { text = text.slice(0, -1); draw(); });
-        });
-        var bottom = row();
-        var symKey = key(bottom, '#+=', 'wide k-sym', function () { sym = !sym; relabel(); });
-        key(bottom, 'Space', 'wide k-space', function () { type(' '); });
-        key(bottom, 'Clear', 'wide', function () { text = ''; draw(); });
-        key(bottom, 'Done', 'wide k-done', function () { done(); });
-        var snips = row();
-        ['http://', 'https://', 'www.', '.com', '.net', '.org', ':8080', '.m3u', '.m3u8'].forEach(function (t) {
-            key(snips, t, 'wide snip', function () { type(t); });
-        });
+            relabel();
+        }
+
+        function digitKey(r, c, ch) { key(grid, r, c, 1, ch, 'kb-ch kb-digit', function () { type(ch); }); }
+
         function relabel() {
-            var layer = sym ? LAYERS.symbols : LAYERS.letters;
-            keyEls.forEach(function (ks, ri) {
-                ks.forEach(function (b, ci) {
-                    var c = layer[ri].charAt(ci);
-                    b.textContent = shift && !sym ? c.toUpperCase() : c;
-                });
+            var layer = sym ? KB_LAYERS.symbols : kind === 'url' ? KB_LAYERS.url : KB_LAYERS.letters;
+            letterKeys.forEach(function (b, i) {
+                var ch = layer[Math.floor(i / 10)].charAt(i % 10);
+                if (shift && !sym) ch = ch.toUpperCase();
+                if (b.textContent !== ch) b.textContent = ch;
             });
-            var sh = kb.querySelector('.k-shift');
-            sh.classList.toggle('on', shift && !sym);
-            sh.classList.toggle('lock', caps && !sym);
-            sh.textContent = caps ? '⇪' : '⇧';
+            shiftKey.classList.toggle('on', shift && !sym);
+            shiftKey.classList.toggle('lock', caps && !sym);
+            shiftKey.textContent = caps && !sym ? '⇪' : '⇧';
             symKey.textContent = sym ? 'abc' : '#+=';
             symKey.classList.toggle('on', sym);
         }
-        function type(t) { text += t; draw(); }
+
+        /* Navigation: explicit, so nothing is measured on a key press (except the chip rows, once). */
+        var chipsPlaced = false;
+        function placeChips() {
+            if (chipsPlaced || rows.length < 7) return;
+            chipsPlaced = true;
+            var g = grid.getBoundingClientRect();
+            for (var r = 6; r < rows.length; r++) {
+                rows[r].forEach(function (k) {
+                    var b = k.el.getBoundingClientRect();
+                    k.c = (b.left - g.left) / g.width * cols;
+                    k.w = b.width / g.width * cols;
+                });
+            }
+        }
+        function navFor(r, i) {
+            function side(step) {
+                return function () {
+                    var row = rows[r], k = row[(i + step + row.length) % row.length];
+                    if (r > 0) col = k.c + k.w / 2;
+                    return k.el;
+                };
+            }
+            function vert(step) {
+                return function () {
+                    var t = r + step;
+                    if (t < 0 || t >= rows.length) return focused;
+                    if (t >= 6 || r >= 6) placeChips();
+                    var best = null, bd = 1e9;
+                    rows[t].forEach(function (k) {
+                        var dist = col < k.c ? k.c - col : col >= k.c + k.w ? col - (k.c + k.w) + 0.001 : -1;
+                        if (dist < bd) { bd = dist; best = k; }
+                    });
+                    return best.el;
+                };
+            }
+            return { left: side(-1), right: side(1), up: vert(-1), down: vert(1) };
+        }
+
+        function flash(b) {
+            b.classList.add('press');
+            clearTimeout(b._flash);
+            b._flash = setTimeout(function () { b.classList.remove('press'); }, 150);
+        }
+
+        /* Text */
         function draw() {
             if (field.value !== text) field.value = text;
-            // Keep the end of long addresses in view.
-            field.scrollLeft = field.scrollWidth;
+            if (pin) {
+                var s = '';
+                for (var i = 0; i < o.max; i++) s += '<i class="kb-slot' + (i < text.length ? ' on' : '') + '"></i>';
+                val.innerHTML = s;
+            } else {
+                val.textContent = secret ? text.replace(/[\s\S]/g, '•') : text;
+            }
+            disp.classList.toggle('empty', !text);
         }
-        function done() { nativeInput = null; closeSheet(); cb(text); }
-        relabel();
-        var foot = el('div', 'entry-wrap');
-        foot.appendChild(fieldBox);
-        foot.appendChild(kb);
-        entry = { type: type, del: function () { text = text.slice(0, -1); draw(); }, done: done };
-        openSheet(title, [], { footer: foot, wide: true, note: note, onClose: function () { nativeInput = null; entry = null; } });
+        function changed() { draw(); if (o.live) o.live(text); }
+        function type(t) {
+            if (numeric) t = t.replace(/\D/g, '');
+            if (!t || submitted || (o.max && text.length >= o.max)) return;
+            text += t;
+            changed();
+            if (o.autoSubmit && text.length >= o.max) setTimeout(done, 160);   // let the last dot show
+        }
+        function del() { if (text) { text = text.slice(0, -1); changed(); } }
+        function done() {
+            if (submitted || closed || (pin && text.length < o.max)) return;
+            submitted = true;
+            closeIme();
+            closeSheet();
+            o.onDone(text);
+        }
+
+        /* The TV's own keyboard (and the SmartThings phone app) types into the real input on the display. */
+        function openIme() {
+            nativeInput = { field: field, submit: done, close: closeIme };
+            disp.classList.add('ime');
+            field.value = text;
+            field.focus();
+        }
+        function closeIme() {
+            if (nativeInput && nativeInput.field === field) nativeInput = null;
+            disp.classList.remove('ime');
+            if (document.activeElement === field) field.blur();
+        }
+        field.addEventListener('input', function () {
+            var v = numeric ? field.value.replace(/\D/g, '') : field.value;
+            if (o.max) v = v.slice(0, o.max);
+            if (v !== text) { text = v; changed(); }
+            if (o.autoSubmit && text.length >= o.max) setTimeout(done, 160);
+        });
+        field.addEventListener('blur', function () { if (nativeInput && nativeInput.field === field) closeIme(); });
+
+        var dock = !!o.dock && !numeric;
+        openSheet(title, [], {
+            footer: wrap, wide: !numeric, note: note, host: dock ? 'kb-dock' : '',
+            onClose: function () {
+                closed = true;
+                closeIme();
+                if (entry === me) entry = null;
+                if (!submitted) o.onCancel(original, text);
+            }
+        });
+        sheet.el.classList.add('kb-card');
+        if (numeric) sheet.el.classList.add('kb-card-num');
+        me = entry = { card: sheet.el, type: type, del: del, numeric: numeric };
         draw();
-        focus(keyEls[1][0]);
+        var start = rows[numeric ? 1 : 2][0];   // "1" on a number pad, "q" on the keyboard
+        col = start.c + start.w / 2;
+        focus(start.el);
     }
 
     /* Remote keys while the keyboard is open: number keys type digits. */
-    var entry = null;
     function entryKey(key) {
-        if (!entry || !sheet) return false;
+        if (!entry || !sheet || sheet.el !== entry.card) return false;
         var m = /^d(\d)$/.exec(key);
         if (m) { entry.type(m[1]); return true; }
         return false;
     }
 
-    /* Keys while the TV keyboard is open: Done (or Enter) keeps the text, Cancel or Back leaves the field.
-     * Returns true when the key belonged to the field. */
+    /* Raw key events, before the remote's key routing. Returns true when the key was used here.
+     * While the TV keyboard is open: Done or Enter sends the text, Cancel or Back returns to the on-screen keys.
+     * While the on-screen keyboard is open: a hardware keyboard types, Backspace and Delete delete. */
     function nativeKey(e) {
-        if (!nativeInput || document.activeElement !== nativeInput.field) return false;
         var c = e.keyCode;
-        if (c === 13 || c === 65376 || c === 65385 || c === 10009 || c === 27) {
-            e.preventDefault();
-            var n = nativeInput;
-            n.field.blur();
-            n.done();
+        if (nativeInput && document.activeElement === nativeInput.field) {
+            if (c === 13 || c === 65376) { e.preventDefault(); nativeInput.submit(); return true; }
+            if (c === 65385 || c === 10009 || c === 27) { e.preventDefault(); nativeInput.close(); return true; }
+            // Up and down leave the field for the on-screen keys; everything else is typing.
+            if (c === 38 || c === 40) { nativeInput.close(); return false; }
             return true;
         }
-        // Up and down leave the field for the keyboard; everything else is typing.
-        if (c === 38 || c === 40) { nativeInput.field.blur(); nativeInput.done(); return false; }
-        return true;
-    }
-
-    // Number pad for Plex Home PINs.
-    function pinPad(title, cb) {
-        var digits = '';
-        var display = el('div', 'pin-display', '');
-        var pad = el('div', 'hlist pin-pad');
-        function draw() { display.textContent = digits ? digits.replace(/./g, '●') : '– – – –'; }
-        '1234567890'.split('').concat(['⌫']).forEach(function (k) {
-            var b = el('div', 'key focusable', k);
-            b._select = function () {
-                if (k === '⌫') digits = digits.slice(0, -1);
-                else if (digits.length < 4) digits += k;
-                draw();
-                if (digits.length === 4) { closeSheet(); cb(digits); }
-            };
-            pad.appendChild(b);
-        });
-        draw();
-        var foot = el('div', 'pin-wrap');
-        foot.appendChild(display);
-        foot.appendChild(pad);
-        openSheet(title, [], { footer: foot });
+        if (!entry || !sheet || sheet.el !== entry.card) return false;
+        if (c === 8 || c === 46) { e.preventDefault(); entry.del(); return true; }
+        var k = e.key;
+        if (k && k.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+            e.preventDefault();
+            entry.type(k);
+            return true;
+        }
+        return false;
     }
 
     /* ---------- screen plumbing ---------- */
@@ -1206,9 +1356,10 @@ var UI = (function () {
                     searchState.results = res; drawResults();
                 }).catch(function (e) { Util.toast(e.message); });
             }, 450);
-            // The same keyboard as everywhere else; the results follow what was typed.
+            // The same keyboard as everywhere else, docked to the left: the results follow each key press beside it.
+            function typed(t) { searchState.q = t; drawQ(); run(); }
             [['⌕  Type to search', function () {
-                textEntry('Search Plex', searchState.q, function (t) { searchState.q = t; drawQ(); run(); });
+                textEntry('Search Plex', searchState.q, typed, null, { live: typed, dock: true, placeholder: 'Movies, shows, episodes, collections' });
             }], ['Clear', function () { searchState.q = ''; drawQ(); run(); }]].forEach(function (k) {
                 var b = el('div', 'key wide focusable', k[0]);
                 b._select = k[1];

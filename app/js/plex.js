@@ -208,6 +208,18 @@ var Plex = (function () {
         }), { token: state.server.token });
     }
 
+    // Takes an item off Continue Watching (On Deck) without changing its watched state.
+    function removeFromContinueWatching(item) {
+        return request('PUT', state.server.uri + '/actions/removeFromContinueWatching?' + Util.qs({ ratingKey: item.ratingKey }), { token: state.server.token });
+    }
+
+    // [{ title: 'A', size: 12 }, …] in title-sort order, with the same filters as the grid, for the A–Z jump.
+    function firstCharacter(id, opts) {
+        opts = opts || {};
+        return api('/library/sections/' + id + '/firstCharacter', { unwatched: opts.unwatched ? 1 : null, genre: opts.genre || null })
+            .then(function (mc) { return mc.Directory || []; });
+    }
+
     // Next episode after this one: the next in its season, else the first episode of the next season.
     function nextEpisode(ep) {
         if (!ep || ep.type !== 'episode') return Promise.resolve(null);
@@ -332,7 +344,7 @@ var Plex = (function () {
         listServers: listServers, connect: connect,
         sections: sections, sectionItems: sectionItems, recentlyAdded: recentlyAdded, genres: genres, collections: collections,
         onDeck: onDeck, metadata: metadata, personItems: personItems, children: children, similar: similar, collectionItems: collectionItems,
-        search: search, markWatched: markWatched, nextEpisode: nextEpisode,
+        search: search, markWatched: markWatched, removeFromContinueWatching: removeFromContinueWatching, firstCharacter: firstCharacter, nextEpisode: nextEpisode,
         imageUrl: imageUrl, clearLogo: clearLogo,
         previewIndex: previewIndex, subtitleText: subtitleText, searchSubtitles: searchSubtitles, saveSubtitle: saveSubtitle,
         directPlayUrl: directPlayUrl, selectStreams: selectStreams, audioTranscodeUrl: audioTranscodeUrl,

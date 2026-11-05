@@ -135,6 +135,7 @@ var Player = (function () {
         $('panel').classList.add('hidden');
         $('upnext').classList.add('hidden');
         $('skip').classList.add('hidden');
+        $('perror').classList.add('hidden');
         subStyle();
         drawMarks();
         setSubtitle(opts.subtitle || null, true);
@@ -205,24 +206,62 @@ var Player = (function () {
     function fail(msg) {
         if (!s) return;
         // Direct play failed. A first failure is often transient (the server was slow to answer for a large remux), so try
-        // direct play once more: converting the audio would lose Atmos. Only after that, retry with the audio converted.
+        // direct play once more: converting the audio would lose Atmos.
+        s.gen++;   // one failure can report twice (error event and failed prepare): ignore the rest of this attempt
         if (s.mode === 'direct' && !s.directRetried) {
             s.directRetried = true;
             Util.toast(msg + '. Trying again…', 4000);
             engine.close();
-            setTimeout(function () { if (s) load(s.lastTime); }, 1500);
+            var me = s;
+            setTimeout(function () { if (s === me && !s.err) load(s.lastTime); }, 1500);
             return;
         }
-        if (s.mode === 'direct' && !s.retried) {
-            s.retried = true;
-            s.mode = 'audio-transcode';
-            Util.toast(msg + '. Retrying with audio converted by the server.', 7000);
-            engine.close();
-            load(s.lastTime);
-            return;
+        // Then let the viewer choose: converting the audio loses Atmos, another version may play as it is.
+        showError(msg);
+    }
+
+    /* Playback error card: Try Again · Convert audio · Other version · Close (◀ ▶ and OK, Back closes). */
+    function showError(msg) {
+        engine.close();
+        s.prepared = false;
+        if (s.panel) closePanel();
+        if (s.pending) { clearTimeout(s.pending.timer); s.pending = null; $('player-ui').classList.remove('seeking'); }
+        var media = s.item.Media || [], btns = [];
+        btns.push({ label: 'Try Again', action: function () { load(s.lastTime); } });
+        btns.push({ label: s.mode === 'direct' ? 'Convert audio' : 'Direct play', action: function () {
+            s.mode = s.mode === 'direct' ? 'audio-transcode' : 'direct'; s.retried = true; load(s.lastTime);
+        } });
+        if (media.length > 1) btns.push({ label: 'Other version', action: function () { chooseVersion((mediaIndex() + 1) % media.length); } });
+        btns.push({ label: 'Close', action: function () { stop(false); } });
+        // OK on the card does what used to happen by itself: convert the audio (direct play), or try again.
+        s.err = { msg: msg, btns: btns, sel: s.mode === 'direct' ? 1 : 0 };
+        $('player-ui').classList.remove('buffering');
+        renderError();
+    }
+    function renderError() {
+        var E = s.err, el = $('perror');
+        el.innerHTML = '<div class="pe-card"><div class="pe-t">Playback failed</div><div class="pe-m">' + Util.esc(E.msg) + '</div>' +
+            '<div class="pe-note">' + Util.esc(s.mode === 'direct'
+                ? 'Convert audio keeps the video untouched (HDR10+ stays) and has the server send E-AC3 5.1 instead of the original track.'
+                : 'The server was converting the audio. Direct play sends the original file to the TV.') + '</div>' +
+            '<div class="pe-btns">' + E.btns.map(function (b, i) {
+                return '<span class="pe-btn' + (i === E.sel ? ' focused' : '') + '">' + Util.esc(b.label) + '</span>';
+            }).join('') + '</div></div>';
+        el.classList.remove('hidden');
+    }
+    function errorKey(key) {
+        var E = s.err;
+        if (key === 'left') E.sel = Math.max(0, E.sel - 1);
+        else if (key === 'right') E.sel = Math.min(E.btns.length - 1, E.sel + 1);
+        else if (key === 'enter' || key === 'back') {
+            var b = key === 'back' ? E.btns[E.btns.length - 1] : E.btns[E.sel];
+            s.err = null;
+            $('perror').classList.add('hidden');
+            b.action();
+            return true;
         }
-        Util.toast(msg, 8000);
-        stop(false);
+        renderError();
+        return true;
     }
 
     /* ---------- subtitles ---------- */
@@ -244,7 +283,7 @@ var Player = (function () {
                 if (s && s.sub === mine) mine.cues = Subs.parse(raw, stream.codec);
             }, function (e) { if (!quiet) Util.toast('Could not load subtitles: ' + e.message); });
         } else if (stream && s.mode !== 'direct' && !quiet) {
-            Util.toast('Embedded subtitles show in direct play only. Press Yellow to go back to direct play.', 6000);
+            Util.toast('Embedded subtitles show in direct play only. Choose "Back to direct play" in the audio column.', 6000);
         }
         applyTracks();
         if (s.panel) renderPanel();
@@ -358,7 +397,7 @@ var Player = (function () {
         var t = s.lastTime;
         var pct = d ? Math.min(100, t / d * 100) : 0;
         $('osd-progress').style.width = pct + '%';
-        var shown = s.scrub ? s.scrub.pos : t;
+        var shown = s.scrub ? s.scrub.pos : s.pending ? s.pending.target : t;
         var spct = d ? Math.min(100, shown / d * 100) : 0;
         $('osd-head').style.left = spct + '%';
         $('osd-elapsed').textContent = Util.fmtTime(shown);
@@ -367,7 +406,7 @@ var Player = (function () {
         var ch = chapterAt(shown);
         $('osd-chapter').textContent = ch && s.chapters.length > 1 ? (ch.tag || 'Chapter ' + ch.index) : '';
         var thumb = $('osd-thumb');
-        if (s.scrub) {
+        if (s.scrub || s.pending) {
             var url = Bif.frameUrl(s.bif, shown);
             thumb.style.left = Math.max(8, Math.min(92, spct)) + '%';
             thumb.querySelector('.img').style.backgroundImage = url ? 'url("' + url + '")' : 'none';
@@ -453,13 +492,32 @@ var Player = (function () {
         drawTime();
     }
 
+    /* ◀ ▶ while playing: presses add up (−10 s / +30 s each) and the timeline shows where you'll land; one seek
+     * happens 600 ms after the last press, so five quick presses cost one seek (one transcode restart) instead of five. */
     function jump(deltaMs) {
-        seekTo(s.lastTime + deltaMs);
+        var p = s.pending;
+        if (!p) p = s.pending = { base: s.lastTime, delta: 0, timer: null };
+        p.delta += deltaMs;
+        p.target = Math.max(0, Math.min((s.duration || Infinity) - 3000, p.base + p.delta));
+        clearTimeout(p.timer);
+        p.timer = setTimeout(commitJump, 600);
+        var j = $('osd-jump'), secs = Math.round(Math.abs(p.delta) / 1000);
+        j.textContent = (p.delta >= 0 ? '+' : '−') + (secs < 100 ? secs + ' s' : Util.fmtTime(secs * 1000));
+        j.className = (p.delta >= 0 ? 'right' : 'left') + ' hold';
+        $('player-ui').classList.add('seeking');
+        showOsd();
+    }
+    function commitJump() {
+        var p = s && s.pending;
+        if (!p) return;
+        clearTimeout(p.timer);
+        s.pending = null;
+        $('player-ui').classList.remove('seeking');
         var j = $('osd-jump');
-        j.textContent = (deltaMs > 0 ? '+' : '−') + Math.abs(deltaMs / 1000) + 's';
-        j.className = deltaMs > 0 ? 'right' : 'left';
+        j.className = p.delta >= 0 ? 'right' : 'left';
         void j.offsetWidth;
         j.classList.add('go');
+        if (p.delta) seekTo(p.target);
         showOsd();
     }
 
@@ -500,7 +558,7 @@ var Player = (function () {
         showOsd();
     }
 
-    // Yellow: swap between direct play and "video copied, audio converted" at the current position.
+    // "Convert audio on the server" / "Back to direct play" (or Yellow): swap between direct play and "video copied, audio converted" at the current position.
     function toggleAudioFix() {
         s.mode = s.mode === 'direct' ? 'audio-transcode' : 'direct';
         s.retried = true;
@@ -509,7 +567,9 @@ var Player = (function () {
         load(s.lastTime);
     }
 
-    /* ---------- panel (▼): Info · Chapters · Audio · Subtitles · Picture ---------- */
+    /* ---------- panel (▼): Audio & Subtitles · Chapters · Picture · Info ----------
+     * The QN900B's SolarCell remote has no colour keys, so everything is reachable with the arrows: ▼ opens straight
+     * on Audio & Subtitles, two columns side by side (◀ ▶ moves between them). Colour keys still work as shortcuts. */
 
     var LANG2 = { eng: 'en', tur: 'tr', ger: 'de', deu: 'de', fre: 'fr', fra: 'fr', spa: 'es', ita: 'it', por: 'pt', dut: 'nl', nld: 'nl', rus: 'ru', ara: 'ar', jpn: 'ja', kor: 'ko', chi: 'zh', zho: 'zh' };
     var CYCLE = {
@@ -518,20 +578,17 @@ var Player = (function () {
     var NAMES = { s: 'Small', m: 'Medium', l: 'Large', xl: 'Extra Large', white: 'White', yellow: 'Yellow', grey: 'Soft Grey', shadow: 'Drop Shadow', outline: 'Outline', box: 'Dark Box', bottom: 'Bottom', raised: 'Raised' };
 
     function tabs() {
-        var t = [{ id: 'info', label: 'Info' }];
+        var t = [{ id: 'tracks', label: 'Audio & Subtitles' }];
         if (s.chapters.length > 1) t.push({ id: 'chapters', label: 'Chapters' });
-        t.push({ id: 'audio', label: 'Audio' }, { id: 'subtitles', label: 'Subtitles' }, { id: 'picture', label: 'Picture' });
+        t.push({ id: 'picture', label: 'Picture' }, { id: 'info', label: 'Info' });
         return t;
     }
+    function tabIndex(id) { return Math.max(0, tabs().map(function (x) { return x.id; }).indexOf(id)); }
 
-    function openPanel(id) {
-        var t = tabs();
-        var i = Math.max(0, t.map(function (x) { return x.id; }).indexOf(id));
-        s.panel = { tab: i, zone: id === 'info' ? 'tabs' : 'list', sel: 0, results: null };
-        var items = panelItems();
-        var chk = items.map(function (x) { return !!x.checked; }).indexOf(true);
-        s.panel.sel = chk >= 0 ? chk : 0;
-        if (!items.length) s.panel.zone = 'tabs';
+    // col: 0 = audio, 1 = subtitles (on the Audio & Subtitles tab)
+    function openPanel(id, col) {
+        s.panel = { tab: tabIndex(id), zone: 'list', col: col || 0, sel: [], results: null };
+        resetSel();
         $('panel').classList.remove('hidden');
         $('player-ui').classList.add('panel-open');
         renderPanel();
@@ -544,6 +601,23 @@ var Player = (function () {
         showOsd();
     }
 
+    // Focus the checked row of every column (or its first row); a tab without rows keeps focus on the tab bar.
+    function resetSel() {
+        var P = s.panel, cols = columns();
+        P.sel = cols.map(function (items) {
+            var chk = items.map(function (x) { return !!x.checked; }).indexOf(true);
+            return chk >= 0 ? chk : stepRow(items, -1, 1);
+        });
+        if (P.col >= cols.length) P.col = 0;
+        if (!cols[P.col].length) P.zone = 'tabs';
+    }
+
+    // Next selectable row from i in direction dir (headers are skipped); -1 when there is none.
+    function stepRow(items, i, dir) {
+        for (var n = i + dir; n >= 0 && n < items.length; n += dir) if (!items[n].header) return n;
+        return -1;
+    }
+
     function adjustSetting(key, dir) {
         var list = CYCLE[key];
         s.settings[key] = list[(list.indexOf(s.settings[key]) + dir + list.length) % list.length];
@@ -551,62 +625,118 @@ var Player = (function () {
         subStyle();
     }
 
-    function panelItems() {
-        var id = tabs()[s.panel.tab].id, p = s.plan, items = [];
+    function columns() {
+        var id = tabs()[s.panel.tab].id;
+        if (id === 'tracks') return [audioItems(), subtitleItems()];
         if (id === 'chapters') {
             var cur = chapterAt(s.lastTime);
-            return s.chapters.map(function (c) {
+            return [s.chapters.map(function (c) {
                 return { chapter: c, checked: c === cur, action: function () { seekTo(c.startTimeOffset); closePanel(); } };
+            })];
+        }
+        if (id === 'picture') return [pictureItems()];
+        return [[]];
+    }
+
+    /* Short track names: "English · TrueHD Atmos 7.1", with what happens to it on the second line. */
+    var CODECS = { truehd: 'TrueHD', mlp: 'TrueHD', eac3: 'E-AC3', ac3: 'AC3', aac: 'AAC', dca: 'DTS', dts: 'DTS', flac: 'FLAC', opus: 'Opus',
+        mp3: 'MP3', mp2: 'MP2', pcm: 'PCM', lpcm: 'PCM', vorbis: 'Vorbis', alac: 'ALAC',
+        srt: 'SRT', subrip: 'SRT', ass: 'ASS', ssa: 'SSA', vtt: 'WebVTT', webvtt: 'WebVTT', mov_text: 'Text', pgs: 'PGS', hdmv_pgs_subtitle: 'PGS',
+        vobsub: 'VobSub', dvd_subtitle: 'VobSub', dvb_subtitle: 'DVB' };
+    function langName(t) { return t.language || t.languageTag || (t.languageCode ? t.languageCode.toUpperCase() : 'Unknown'); }
+    function channelsName(n) { return n >= 8 ? '7.1' : n >= 6 ? '5.1' : n === 2 ? 'Stereo' : n === 1 ? 'Mono' : n ? n + ' ch' : ''; }
+    function audioName(a) {
+        var c = (a.codec || '').toLowerCase(), full = (a.extendedDisplayTitle || '') + ' ' + (a.displayTitle || '');
+        var codec = CODECS[c] || (a.codec || '').toUpperCase();
+        if (/^dca|^dts/.test(c)) codec = /DTS:X/i.test(full) ? 'DTS:X' : (/DTS-HD MA|\bMA\b/.test(full) || a.profile === 'ma') ? 'DTS-HD MA' : 'DTS';
+        if (Decide.isAtmos(a) && !/DTS/.test(codec)) codec += ' Atmos';
+        var name = langName(a) + ' · ' + codec + (a.channels ? ' ' + channelsName(a.channels) : '');
+        // Keep a track's own title when it says something new ("Commentary"), not when it repeats the format.
+        if (a.title && !/atmos|truehd|dts|ac-?3|aac|flac|surround|stereo|mono|\d\.\d|lossless|dolby/i.test(a.title)) name += ' · ' + a.title;
+        return name;
+    }
+    function audioRoute(a, current) {
+        var mode = current ? s.mode : Decide.plan(s.item, mediaIndex(), a.id, s.settings).mode;
+        if (mode !== 'direct') return 'Converted to E-AC3 by the server';
+        return /^(eac3|ac3|truehd|mlp)$/i.test(a.codec || '') ? 'Sent to soundbar' : 'Decoded by the TV';
+    }
+    function subName(t) {
+        var tags = [];
+        if (t.forced) tags.push('Forced');
+        if (t.hearingImpaired) tags.push('SDH');
+        var codec = CODECS[(t.codec || '').toLowerCase()] || (t.codec || '').toUpperCase();
+        var name = langName(t) + (tags.length ? ' (' + tags.join(', ') + ')' : '') + (codec ? ' · ' + codec : '');
+        if (t.title && !/forced|sdh|srt|ass|pgs|subrip|full|default/i.test(t.title)) name += ' · ' + t.title;
+        return name;
+    }
+    function mediaIndex() { return Math.max(0, (s.item.Media || []).indexOf(s.plan.media)); }
+    function versionName(m) {
+        var v = Decide.streams((m.Part || [])[0], 1)[0];
+        return [(m.videoResolution || '').toUpperCase(), (m.videoCodec || '').toUpperCase(), Decide.hdrLabel(v).split(' (')[0]].filter(Boolean).join(' · ');
+    }
+
+    function audioItems() {
+        var p = s.plan, items = [{ header: 'Audio' }];
+        Decide.streams(p.part, 2).forEach(function (a) {
+            var cur = a === p.audio;
+            items.push({ label: audioName(a), detail: audioRoute(a, cur), checked: cur, action: function () { if (!cur) chooseAudio(a); } });
+        });
+        items.push({ label: s.mode === 'direct' ? 'Convert audio on the server' : 'Back to direct play', button: true,
+            detail: s.mode === 'direct' ? 'If this track plays silent. Video stays untouched.' : 'Send the original track as-is', action: toggleAudioFix });
+        var media = s.item.Media || [];
+        if (media.length > 1) {
+            items.push({ header: 'Version' });
+            media.forEach(function (m, i) {
+                var cur = m === p.media, mp = Decide.plan(s.item, i, null, s.settings);
+                items.push({ label: versionName(m), checked: cur,
+                    detail: (mp.audio ? audioName(mp.audio) + ' · ' : '') + Math.round((m.bitrate || 0) / 1000) + ' Mbps',
+                    action: function () { if (!cur) chooseVersion(i); } });
             });
         }
-        if (id === 'audio') {
-            Decide.streams(p.part, 2).forEach(function (a) {
-                items.push({ label: Decide.audioLabel(a), checked: a === p.audio, action: function () { chooseAudio(a); } });
+        return items;
+    }
+
+    function subtitleItems() {
+        var p = s.plan, items = [{ header: 'Subtitles' }];
+        if (s.panel.results) {
+            items[0] = { header: 'Found online' };
+            if (!s.panel.results.length) items.push({ label: 'No subtitles found', disabled: true });
+            s.panel.results.forEach(function (r) {
+                items.push({ label: r.label, detail: r.detail, action: function () { downloadSubtitle(r); } });
             });
-            items.push({ label: s.mode === 'direct' ? 'Convert audio on the server (Yellow)' : 'Back to direct play (Yellow)',
-                detail: s.mode === 'direct' ? 'For a TrueHD track that plays silent. Video stays untouched.' : 'Original audio track, sent as-is',
-                action: toggleAudioFix, sep: true });
+            items.push({ label: '‹ Back', button: true, action: function () { s.panel.results = null; resetSel(); } });
             return items;
         }
-        if (id === 'subtitles') {
-            if (s.panel.results) {
-                if (!s.panel.results.length) items.push({ label: 'No subtitles found', disabled: true });
-                s.panel.results.forEach(function (r) {
-                    items.push({ label: r.label, detail: r.detail, action: function () { downloadSubtitle(r); } });
-                });
-                items.push({ label: '‹ Back', action: function () { s.panel.results = null; s.panel.sel = 0; renderPanel(); }, sep: true });
-                return items;
-            }
-            var cur2 = s.sub && s.sub.stream;
-            items.push({ label: 'Off', checked: !cur2, action: function () { setSubtitle(null); } });
-            if (cur2 && cur2.online) items.push({ label: cur2.displayTitle, detail: 'Downloaded from OpenSubtitles', checked: true });
-            Decide.streams(p.part, 3).forEach(function (t) {
-                var img = Decide.isImageSub(t);
-                items.push({ label: t.extendedDisplayTitle || t.displayTitle || t.codec, checked: t === cur2, disabled: img,
-                    detail: img ? 'Image subtitles need the video re-encoded, which would lose HDR10+' : (t.key ? 'External file' : (s.mode === 'direct' ? 'Embedded' : 'Embedded: direct play only')),
-                    action: function () { setSubtitle(t); } });
-            });
-            var langs = searchLangs();
-            items.push({ label: 'Search online…', detail: (Online.keys().opensubtitles ? 'OpenSubtitles and your server' : 'Your server\'s subtitle search (add an OpenSubtitles key in Settings for more)') +
-                ' · ' + langs.join(', '), action: searchSubtitles, sep: true });
-            items.push({ label: 'Delay', value: (s.subOffset >= 0 ? '+' : '') + (s.subOffset / 1000).toFixed(1) + ' s', adjust: function (d) {
-                s.subOffset += d * 100;
-                if (s.sub && !s.sub.stream.key && !s.sub.stream.online) engine.subtitleDelay(s.subOffset);
-            }, detail: '◀ ▶ to shift. Positive = later.' });
-            ['subSize', 'subColor', 'subBg', 'subPos'].forEach(function (k) {
-                var label = { subSize: 'Size', subColor: 'Colour', subBg: 'Style', subPos: 'Position' }[k];
-                items.push({ label: label, value: NAMES[s.settings[k]], adjust: function (d) { adjustSetting(k, d); }, action: function () { adjustSetting(k, 1); } });
-            });
-            return items;
-        }
-        if (id === 'picture') {
-            [['letterbox', 'Original (letterbox)'], ['auto', 'Auto aspect ratio'], ['fill', 'Stretch to fill']].forEach(function (m) {
-                items.push({ label: m[1], checked: s.settings.picture === m[0], action: function () {
-                    s.settings.picture = m[0]; Util.store('settings', s.settings); engine.display(m[0]); renderPanel();
-                } });
-            });
-            return items;
-        }
+        var cur = s.sub && s.sub.stream;
+        items.push({ label: 'Off', checked: !cur, action: function () { setSubtitle(null); } });
+        if (cur && cur.online) items.push({ label: cur.displayTitle, detail: 'Downloaded from OpenSubtitles', checked: true });
+        Decide.streams(p.part, 3).forEach(function (t) {
+            var img = Decide.isImageSub(t);
+            items.push({ label: subName(t), checked: t === cur, disabled: img,
+                detail: img ? 'Image subtitles need the video re-encoded (would lose HDR10+)' : (t.key ? 'External file' : (s.mode === 'direct' ? 'Embedded' : 'Embedded: direct play only')),
+                action: function () { setSubtitle(t); } });
+        });
+        items.push({ label: 'Search online…', button: true, detail: (Online.keys().opensubtitles ? 'OpenSubtitles and your server' : 'Your server\'s subtitle search') +
+            ' · ' + searchLangs().join(', '), action: searchSubtitles });
+        items.push({ label: 'Subtitle delay', value: (s.subOffset >= 0 ? '+' : '') + (s.subOffset / 1000).toFixed(1) + ' s', adjust: function (d) {
+            s.subOffset += d * 100;
+            if (s.sub && !s.sub.stream.key && !s.sub.stream.online) engine.subtitleDelay(s.subOffset);
+        }, detail: '◀ ▶ shifts by 0.1 s · positive shows them later' });
+        return items;
+    }
+
+    function pictureItems() {
+        var items = [{ header: 'Picture size' }];
+        [['letterbox', 'Original (letterbox)'], ['auto', 'Auto aspect ratio'], ['fill', 'Stretch to fill']].forEach(function (m) {
+            items.push({ label: m[1], checked: s.settings.picture === m[0], action: function () {
+                s.settings.picture = m[0]; Util.store('settings', s.settings); engine.display(m[0]);
+            } });
+        });
+        items.push({ header: 'Subtitle style' });
+        ['subSize', 'subColor', 'subBg', 'subPos'].forEach(function (k) {
+            var label = { subSize: 'Size', subColor: 'Colour', subBg: 'Style', subPos: 'Position' }[k];
+            items.push({ label: label, value: NAMES[s.settings[k]], adjust: function (d) { adjustSetting(k, d); }, action: function () { adjustSetting(k, 1); } });
+        });
         return items;
     }
 
@@ -621,6 +751,32 @@ var Player = (function () {
         if (needRestart) { engine.close(); load(s.lastTime); }
         else { applyTracks(); drawInfo(); }
         renderPanel();
+    }
+
+    // Another file version of the same title: restart at the same position, keeping the subtitle language.
+    function chooseVersion(i) {
+        var plan = Decide.plan(s.item, i, null, s.settings);
+        if (!plan.part) { Util.toast('That version has no playable file.'); return; }
+        var prev = s.sub, sub = null;
+        if (prev && !prev.stream.online && prev.stream.id !== -1) {
+            sub = Decide.streams(plan.part, 3).filter(function (t) {
+                return Decide.sameLang(t.languageCode, prev.stream.languageCode) && !!t.forced === !!prev.stream.forced && !Decide.isImageSub(t);
+            })[0] || null;
+        }
+        engine.close();
+        s.prepared = false;
+        s.plan = plan; s.mode = plan.mode; s.retried = false; s.directRetried = false;
+        Memory.setTracks(s.item, { mediaIndex: i, audioId: plan.audio && plan.audio.id });
+        Plex.selectStreams(plan.part.id, plan.audio && plan.audio.id, sub ? sub.id : 0);
+        // A downloaded subtitle belongs to the title, not the file, so it stays.
+        if (!prev || (!prev.stream.online && prev.stream.id !== -1)) setSubtitle(sub, true);
+        Bif.release(s.bif); s.bif = null;
+        var me = s;
+        Plex.previewIndex(plan.part).then(function (buf) { if (s === me && buf) s.bif = Bif.parse(buf); });
+        drawInfo();
+        Util.toast('Version: ' + versionName(plan.media), 3000);
+        load(s.lastTime);
+        if (s.panel) { resetSel(); renderPanel(); }
     }
 
     // Two-letter codes for the subtitle language setting, the audio language, and English.
@@ -657,7 +813,7 @@ var Player = (function () {
         });
         Promise.all([os, server]).then(function (r) {
             if (s !== me || !s.panel) return;
-            s.panel.results = r[0].concat(r[1]); s.panel.sel = 0; renderPanel();
+            s.panel.results = r[0].concat(r[1]); s.panel.col = 1; s.panel.zone = 'list'; s.panel.sel[1] = stepRow(subtitleItems(), -1, 1); renderPanel();
         });
     }
 
@@ -668,7 +824,7 @@ var Player = (function () {
         setSubtitle(null, true);
         s.sub = { stream: { id: -1, online: result, displayTitle: '[' + (result.language || '').toUpperCase() + '] ' + result.title }, cues: cues };
         Memory.setTracks(s.item, { subId: 'online', online: result });
-        if (s.panel) { s.panel.results = null; renderPanel(); }
+        if (s.panel) { s.panel.results = null; resetSel(); renderPanel(); }
         if (!quiet) Util.toast('Subtitles loaded', 2500);
     }
 
@@ -688,7 +844,7 @@ var Player = (function () {
             var added = Decide.streams(part, 3).filter(function (t) { return known.indexOf(t.id) < 0; })[0];
             if (!added) throw new Error('not added');
             s.plan.part.Stream.push(added);
-            s.panel.results = null;
+            if (s.panel) { s.panel.results = null; resetSel(); }
             setSubtitle(added);
             Util.toast('Subtitles added', 3000);
         }).catch(function () {
@@ -698,73 +854,107 @@ var Player = (function () {
                 if (!cues.length) throw new Error('empty');
                 setSubtitle(null, true);
                 s.sub = { stream: { id: -1, key: r.key, displayTitle: r.displayTitle }, cues: cues };
-                s.panel.results = null; renderPanel();
+                if (s.panel) { s.panel.results = null; resetSel(); renderPanel(); }
                 Util.toast('Subtitles loaded for this session', 3000);
             }).catch(function () { Util.toast('Your server could not download these subtitles.', 6000); });
         });
     }
 
+    function rowHtml(x, focusedRow) {
+        if (x.header) return '<div class="p-head">' + Util.esc(x.header) + '</div>';
+        return '<div class="p-row' + (focusedRow ? ' focused' : '') + (x.disabled ? ' disabled' : '') + (x.button ? ' p-btn' : '') + (x.checked ? ' checked' : '') + '">' +
+            '<span class="check">' + (x.checked ? '✓' : '') + '</span><span class="lbl">' + Util.esc(x.label) +
+            (x.detail ? '<small>' + Util.esc(x.detail) + '</small>' : '') + '</span>' +
+            (x.value != null ? '<span class="val">' + (x.adjust ? '‹ ' : '') + Util.esc(x.value) + (x.adjust ? ' ›' : '') + '</span>' : '') + '</div>';
+    }
+
     function renderPanel() {
         if (!s || !s.panel) return;
-        var P = s.panel, t = tabs(), id = t[P.tab].id, items = panelItems();
-        P.sel = Math.max(0, Math.min(items.length - 1, P.sel));
+        var P = s.panel, t = tabs(), id = t[P.tab].id, cols = columns();
+        cols.forEach(function (items, c) {
+            // Keep the selection on a real row when the list changed under it.
+            var i = Math.max(0, Math.min(items.length - 1, P.sel[c] || 0));
+            if (items[i] && items[i].header) i = stepRow(items, i, 1);
+            if (i < 0) i = stepRow(items, items.length, -1);
+            P.sel[c] = i;
+        });
         var html = '<div class="p-tabs">' + t.map(function (x, i) {
-            return '<span class="p-tab' + (i === P.tab ? ' active' : '') + (i === P.tab && P.zone === 'tabs' ? ' focused' : '') + '">' + x.label + '</span>';
+            return '<span class="p-tab' + (i === P.tab ? ' active' : '') + (i === P.tab && P.zone === 'tabs' ? ' focused' : '') + '">' + Util.esc(x.label) + '</span>';
         }).join('') + '</div>';
         if (id === 'info') {
             var it = s.item, p = s.plan;
-            var thumb = it.type === 'episode' ? it.thumb : it.thumb;
-            html += '<div class="p-info"><div class="p-poster" style="background-image:url(\'' + Plex.imageUrl(thumb, 300, it.type === 'episode' ? 169 : 450) + '\')"></div><div class="p-text">' +
+            html += '<div class="p-info"><div class="p-poster" style="background-image:url(\'' + Plex.imageUrl(it.thumb, 300, it.type === 'episode' ? 169 : 450) + '\')"></div><div class="p-text">' +
                 '<div class="p-title">' + Util.esc(it.type === 'episode' ? it.grandparentTitle + ' · ' + it.title : it.title) + '</div>' +
                 '<p class="clamp3">' + Util.esc(it.summary || '') + '</p>' +
                 '<div class="kv"><b>Video</b><span>' + Util.esc(p.video ? (p.video.extendedDisplayTitle || p.video.displayTitle) : '?') + ' · ' + Util.esc(p.hdr) + '</span></div>' +
-                '<div class="kv"><b>Audio</b><span>' + Util.esc(Decide.audioLabel(p.audio)) + (s.mode === 'direct' ? ' · sent as-is' : ' · converted to E-AC3 5.1 by the server') + '</span></div>' +
+                '<div class="kv"><b>Audio</b><span>' + Util.esc(p.audio ? audioName(p.audio) : 'none') + ' · ' + (s.mode === 'direct' ? 'sent as-is' : 'converted to E-AC3 5.1 by the server') + '</span></div>' +
                 '<div class="kv"><b>Playback</b><span>' + (s.mode === 'direct' ? 'Direct play' : 'Video copied untouched, audio converted') + ' · ' + Util.esc(engine.name) + '</span></div>' +
                 '</div></div>';
         } else if (id === 'chapters') {
-            html += '<div class="p-chapters">' + items.map(function (x, i) {
+            html += '<div class="p-chapters">' + cols[0].map(function (x, i) {
                 var c = x.chapter;
-                return '<div class="p-ch' + (P.zone === 'list' && i === P.sel ? ' focused' : '') + (x.checked ? ' current' : '') + '">' +
+                return '<div class="p-ch' + (P.zone === 'list' && i === P.sel[0] ? ' focused' : '') + (x.checked ? ' current' : '') + '">' +
                     '<div class="img" style="' + (c.thumb ? 'background-image:url(\'' + Plex.imageUrl(c.thumb, 360, 203) + '\')' : '') + '"></div>' +
                     '<div class="t">' + Util.esc(c.tag || 'Chapter ' + c.index) + '</div><div class="s">' + Util.fmtTime(c.startTimeOffset) + '</div></div>';
             }).join('') + '</div>';
         } else {
-            html += '<div class="p-list">' + items.map(function (x, i) {
-                return '<div class="p-row' + (P.zone === 'list' && i === P.sel ? ' focused' : '') + (x.disabled ? ' disabled' : '') + (x.sep ? ' sep' : '') + '">' +
-                    '<span class="check">' + (x.checked ? '✓' : '') + '</span><span class="lbl">' + Util.esc(x.label) +
-                    (x.detail ? '<small>' + Util.esc(x.detail) + '</small>' : '') + '</span>' +
-                    (x.value != null ? '<span class="val">' + (x.adjust ? '‹ ' : '') + Util.esc(x.value) + (x.adjust ? ' ›' : '') + '</span>' : '') + '</div>';
+            html += '<div class="p-cols' + (cols.length > 1 ? ' two' : '') + '">' + cols.map(function (items, c) {
+                return '<div class="p-col' + (P.zone === 'list' && P.col === c ? ' active' : '') + '"><div class="p-list">' + items.map(function (x, i) {
+                    return rowHtml(x, P.zone === 'list' && P.col === c && i === P.sel[c]);
+                }).join('') + '</div></div>';
             }).join('') + '</div>';
         }
         $('panel').innerHTML = html;
-        var f = $('panel').querySelector('.p-row.focused, .p-ch.focused');
-        if (f) { try { f.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) { f.scrollIntoView(false); } }
+        // Each column scrolls on its own so the focused row stays in view.
+        Array.prototype.forEach.call($('panel').querySelectorAll('.p-col'), function (colEl, c) {
+            var f = colEl.querySelector('.p-row.focused') || colEl.querySelector('.p-row.checked');
+            var list = colEl.firstChild;
+            var y = f ? Math.max(0, f.offsetTop + f.offsetHeight - colEl.clientHeight + 40) : 0;
+            list.style.transform = 'translateY(' + (-y) + 'px)';
+        });
+        var ch = $('panel').querySelector('.p-ch.focused');
+        if (ch) { try { ch.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) { ch.scrollIntoView(false); } }
     }
 
     function panelKey(key) {
-        var P = s.panel, t = tabs(), items = panelItems(), horizontal = t[P.tab].id === 'chapters';
-        if (key === 'back' || ((key === 'up' || key === 'info') && P.zone === 'tabs')) { if (key === 'back' && P.zone === 'list') P.zone = 'tabs'; else { closePanel(); return true; } }
-        else if (P.zone === 'tabs') {
+        var P = s.panel, t = tabs(), id = t[P.tab].id, cols = columns();
+        if (key === 'back') {
+            if (P.results) { P.results = null; resetSel(); }
+            else { closePanel(); return true; }
+        } else if (key === 'info') { closePanel(); return true; }
+        else if (key === 'yellow') toggleAudioFix();
+        else if (key === 'blue' || key === 'green' || key === 'red') {
+            P.tab = tabIndex(key === 'red' ? 'picture' : 'tracks'); P.zone = 'list'; P.col = key === 'green' ? 1 : 0; P.results = null; resetSel();
+        } else if (P.zone === 'tabs') {
             if (key === 'left' || key === 'right') {
                 P.tab = (P.tab + (key === 'left' ? -1 : 1) + t.length) % t.length;
-                P.results = null;
-                var chk = panelItems().map(function (x) { return !!x.checked; }).indexOf(true);
-                P.sel = chk >= 0 ? chk : 0;
-            } else if ((key === 'down' || key === 'enter') && items.length) P.zone = 'list';
+                P.results = null; P.col = 0;
+                resetSel(); P.zone = 'tabs';
+            } else if ((key === 'down' || key === 'enter') && cols[P.col] && cols[P.col].length) P.zone = 'list';
+            else if (key === 'up') { closePanel(); return true; }
         } else {
-            var it = items[P.sel];
-            if (horizontal) {
-                if (key === 'left') P.sel--;
-                else if (key === 'right') P.sel++;
+            var items = cols[P.col], it = items[P.sel[P.col]], n;
+            if (id === 'chapters') {
+                if (key === 'left') P.sel[0] = Math.max(0, P.sel[0] - 1);
+                else if (key === 'right') P.sel[0] = Math.min(items.length - 1, P.sel[0] + 1);
                 else if (key === 'up') P.zone = 'tabs';
-            } else if (key === 'up') { if (P.sel === 0) P.zone = 'tabs'; else P.sel--; }
-            else if (key === 'down') P.sel++;
-            else if ((key === 'left' || key === 'right') && it && it.adjust) it.adjust(key === 'left' ? -1 : 1);
+            } else if (key === 'up') {
+                n = stepRow(items, P.sel[P.col], -1);
+                if (n < 0) P.zone = 'tabs'; else P.sel[P.col] = n;
+            } else if (key === 'down') {
+                n = stepRow(items, P.sel[P.col], 1);
+                if (n >= 0) P.sel[P.col] = n;
+            } else if (key === 'left' || key === 'right') {
+                if (it && it.adjust) it.adjust(key === 'left' ? -1 : 1);
+                else {
+                    var nc = P.col + (key === 'left' ? -1 : 1);
+                    if (nc >= 0 && nc < cols.length && cols[nc].length) P.col = nc;
+                }
+            }
             if (key === 'enter' && it && !it.disabled && it.action) it.action();
         }
-        if (key === 'yellow') toggleAudioFix();
         renderPanel();
-        showOsd();
+        if (s) showOsd();
         return true;
     }
 
@@ -772,6 +962,9 @@ var Player = (function () {
 
     function handleKey(key) {
         if (!s) return false;
+        if (s.err) return errorKey(key);
+        var seekKey = key === 'left' || key === 'right' || key === 'ff' || key === 'rewind';
+        if (s.pending && !seekKey) commitJump();
         if (s.panel) return panelKey(key);
         if (s.scrub) {
             if (key === 'left' || key === 'rewind') scrubStep(-1);
@@ -794,12 +987,13 @@ var Player = (function () {
         case 'left': case 'rewind': if (paused) scrubStep(-1); else jump(-10000); break;
         case 'right': case 'ff': if (paused) scrubStep(1); else jump(30000); break;
         case 'up': showOsd(); break;
-        case 'down': case 'info': openPanel('info'); break;
+        case 'down': case 'info': openPanel('tracks', 0); break;
         case 'chup': chapterJump(1); break;
         case 'chdown': chapterJump(-1); break;
+        // Colour keys are extras (the SolarCell remote has none); everything is also in the ▼ panel.
         case 'yellow': toggleAudioFix(); break;
-        case 'blue': openPanel('audio'); break;
-        case 'green': openPanel('subtitles'); break;
+        case 'blue': openPanel('tracks', 0); break;
+        case 'green': openPanel('tracks', 1); break;
         case 'red': openPanel('picture'); break;
         case 'back': case 'stop': stop(false); break;
         default: showOsd();
@@ -808,6 +1002,7 @@ var Player = (function () {
     }
 
     function stopInternal(notify) {
+        if (s && s.pending) clearTimeout(s.pending.timer);
         clearInterval(reportTimer);
         clearTimeout(osdTimer);
         clearTimeout(subTimer);
@@ -825,6 +1020,7 @@ var Player = (function () {
         $('player-ui').className = 'hidden';
         $('panel').classList.add('hidden');
         $('upnext').classList.add('hidden');
+        $('perror').classList.add('hidden');
         $('subtitle').innerHTML = ''; $('subtitle')._html = null;
         if (notify && cur.onExit) cur.onExit();
     }

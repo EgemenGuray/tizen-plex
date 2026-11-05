@@ -26,13 +26,14 @@ It is a sideloaded Tizen web app. It plays through Samsung's AVPlay API, the sam
 - **Tab bar** at the top: Home, each movie and TV library, Search, Settings, plus a clock and the current Plex Home user.
 - **Home** opens on a full-screen **top shelf**: big artwork, the title logo (when Plex has one), year, rating, runtime, genres and summary, with Play/Resume and More Info. It moves to the next title every 9 s while you rest on it, and ◀ ▶ past the buttons flips between titles. Below it: Continue Watching (wide cards with progress bars) and Recently Added rows for every library.
 - Rows slide sideways and the page slides up so the focused item stays in a steady place. Focused artwork lifts and grows with a light sheen; the background cross-fades to the focused title's art. Everything animates with GPU transforms, which the TV handles smoothly.
-- **Libraries**: poster grid that loads more as you scroll, with Sort (title, date added, release date, rating, recently watched), Unwatched only, Genre, and Collections.
+- **Libraries**: poster grid that loads more as you scroll, with Sort (title, date added, release date, rating, recently watched), Unwatched only, Genre, and Collections. Sorted by title, an **A–Z** button jumps to a letter.
+- **Card menu**: hold OK (or press Info) on any movie, show, season or episode card for Play / Resume, Play from Beginning, Mark Watched / Unwatched, Remove from Continue Watching (on Continue Watching), Go to Show / Go to Season and More Info.
 - **Show page**: backdrop, Play/Resume next episode, Mark watched, season pills (moving onto a season loads it), an episode row with stills, Cast & Crew, More Like This.
 - **Details page** (movie or episode): logo or title, metadata, badges (4K, HDR10+, Dolby Atmos, 5.1/7.1, CC/SDH), summary, and one line that says what will happen when you press Play (direct play or converted audio, which track, and why). Buttons: Resume / Play, Start Over, Trailer, Audio & Subtitles, Version, Mark Watched, Info (full technical sheet). Rows below: Chapters (press one to start there), the rest of the season, Cast & Crew (press a person for their films in your library), Extras, More Like This.
 - **Ratings** on the top shelf, show and details pages: IMDb, Rotten Tomatoes (Tomatometer and audience), Metascore (critics), Metacritic user score, and Letterboxd (movies). See *Online services* below for where each comes from.
 - **Cast & Crew** like Apple TV: every actor with their role, then directors, writers and producers (one card per person, all their jobs listed). Press a person to see everything in your libraries they acted in, directed, wrote or produced, movies and shows together, newest first.
 - **Artwork from the internet**: with a TMDB key, titles get TMDB's logo when Plex has none, a TMDB backdrop when Plex has no background art, and a TMDB poster for cards with no poster.
-- **Search** with a one-line on-screen keyboard (tvOS style); results update as you type.
+- **Search** with a one-line on-screen keyboard (tvOS style); results update as you type. With nothing typed it lists your last 10 searches, with Clear.
 - **Settings**: Plex Home user switching (with PIN pad), server, TrueHD mode, preferred audio language, subtitle mode/language/size/colour/style/position, autoplay next episode, auto-skip intros, picture size, sound setup help and a remote-control cheat sheet.
 
 ### Playback rules (unchanged)
@@ -43,7 +44,7 @@ It is a sideloaded Tizen web app. It plays through Samsung's AVPlay API, the sam
   - *Always send as-is*: try passthrough every time.
   - *Always convert*: the server converts the audio to E-AC3 5.1. The video stays untouched, so HDR10+ is kept, but the Atmos height channels are lost.
 - DTS tracks: another track in the same language is used if there is one, otherwise the server converts the audio.
-- If direct play fails to open, the app retries once with the audio converted.
+- If direct play fails to open, the app retries direct play once, then asks: Try Again, Convert audio, Other version or Close.
 - Reports progress to Plex (resume points and watched status).
 - **Remembers each title on the TV too**: where you stopped, the version, the audio track, and the subtitle you picked (including a downloaded one, which is kept on the TV so a replay doesn't use your download quota). Resume uses whichever is newer, the TV's record or the server's, so it still works when a progress report didn't reach the server or a Plex Home user doesn't sync. Playing from the start or finishing a title clears its resume point.
 
@@ -53,21 +54,21 @@ A translucent overlay in the Apple TV layout: title and badges, a timeline with 
 | Key | Action |
 |---|---|
 | OK | Play / pause. When **Skip Intro** or **Up Next** is on screen, OK presses it |
-| ◀ / ▶ | Back 10 s / forward 30 s. **While paused**: scrub with preview thumbnails (holding speeds up), OK jumps there, Back cancels |
-| ▼ or Info | Panel with tabs: **Info**, **Chapters**, **Audio**, **Subtitles**, **Picture** |
+| ◀ / ▶ | Back 10 s / forward 30 s. Quick presses add up: the timeline shows the target ("+90 s") and one seek happens 0.6 s after the last press. **While paused**: scrub with preview thumbnails (holding speeds up), OK jumps there, Back cancels |
+| ▼ or Info | Panel that opens on **Audio & Subtitles**, then **Chapters**, **Picture**, **Info** |
 | ▲ | Show the timeline |
 | CH ▲ / CH ▼ | Next / previous chapter (±60 s if the file has no chapters) |
-| **Yellow** | Switch between direct play and audio conversion at the current position. Use it if a TrueHD track plays silent |
-| **Blue** / **Green** / **Red** | Audio tab / Subtitles tab / Picture tab |
 | Back | Close the panel, or stop |
+| Colour keys (remotes that have them) | **Yellow** switches between direct play and audio conversion, **Blue** / **Green** open the audio / subtitle column, **Red** opens Picture. The QN900B's SolarCell remote has no colour keys, so all of this is also in the ▼ panel |
 
 - **Skip Intro** appears during Plex intro markers (or skips by itself if you turn that on). **Up Next** appears at the credits marker (or 30 s before the end) with a 10 s countdown; it keeps your subtitle language for the next episode.
 - **Preview thumbnails** come from the server's video preview thumbnails (BIF). Turn on "Generate video preview thumbnails" in the Plex server settings if you don't see them.
 - **Subtitles**: embedded text subtitles (direct play) and external SRT/ASS/SSA/VTT files, drawn by the app so size, colour, outline/box and position can be changed live. A delay of ±0.1 s steps. **Search online…** searches OpenSubtitles directly (like Infuse) and your server's own subtitle search, in your subtitle and audio languages. OpenSubtitles results matching your exact file come first: the app computes the OpenSubtitles file hash by reading 64 KB from each end of the file over the network. Picking one downloads it and shows it straight away. Forced-only / always / off modes with a preferred language pick a default track.
-- **Picture**: original (letterbox), auto aspect ratio, or stretch to fill.
+- **Picture**: original (letterbox), auto aspect ratio, or stretch to fill, plus the subtitle size, colour, style and position.
+- **When playback fails** (after one quiet retry of direct play) a card offers **Try Again**, **Convert audio**, **Other version** (when the title has more than one file) and **Close**.
 
 ### Switching audio and subtitles during playback
-Press **▼** (or **Info**) and move to the **Audio** or **Subtitles** tab, or jump there with **Blue** (audio) or **Green** (subtitles). Audio lists every track in the file (DTS is shown but converted by the server); switching inside a direct-played file is instant, otherwise playback restarts at the same point. Your choice is remembered for that title.
+Press **▼** (or **Info**): the **Audio & Subtitles** tab shows two columns side by side, audio on the left and subtitles on the right; ◀ ▶ moves between them. Tracks read like "English · TrueHD Atmos 7.1" with what happens to them underneath ("Sent to soundbar", "Converted to E-AC3 by the server"). Under the audio tracks: **Convert audio on the server** / **Back to direct play** (use it if a TrueHD track plays silent) and, for titles with more than one file, the **Version** list (switching restarts at the same position). The subtitle column has Off, every track, **Search online…** and **Subtitle delay** (◀ ▶ in 0.1 s steps). Switching audio inside a direct-played file is instant, otherwise playback restarts at the same point. Your choice is remembered for that title.
 
 ## Online services (optional, all free)
 Enter keys in **Settings → Online services** with the on-screen keyboard, or put them in `app/js/keys.js` before building (copy `app/js/keys.example.js`; `keys.js` is git-ignored). Without keys the app works as before and uses only what Plex provides.

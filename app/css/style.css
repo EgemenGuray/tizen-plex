@@ -304,11 +304,6 @@ body.scrolled #backdrop .bd-shade { background: linear-gradient(180deg, rgba(8,8
 .sheet-row.disabled { opacity: .45; }
 .kv { display: flex; padding: 8px 0; font-size: 25px; }
 .kv b { flex: 0 0 210px; color: var(--text2); font-weight: 500; }
-.pin-wrap { text-align: center; }
-.pin-display { font-size: 60px; letter-spacing: 18px; margin: 10px 0 30px; }
-.pin-pad { display: flex; gap: 14px; justify-content: center; }
-.pin-pad .key { background: var(--fill); border-radius: 50%; width: 70px; height: 70px; font-size: 30px; }
-.pin-pad .key.focused { background: #fff; }
 
 /* ---------- toast ---------- */
 
@@ -484,29 +479,86 @@ body.playing #toast { background: rgba(28,28,32,.88); }
 }
 .person-text .page-title { margin-bottom: 10px; }
 
-/* ---------- text entry ---------- */
+/* ---------- on-screen keyboard ---------- */
 
-.entry-wrap { padding: 0 10px; }
-.entry-display { font-size: 40px; font-weight: 600; min-height: 70px; padding: 6px 20px; border-bottom: 2px solid rgba(255,255,255,.2); word-break: break-all; }
-.entry-field { display: flex; align-items: center; border-radius: 14px; background: rgba(255,255,255,.08); padding: 0 22px; margin-bottom: 18px; border: 3px solid transparent; }
-.entry-field.focused { border-color: #fff; }
-.entry-native { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text); font-size: 34px; font-weight: 600; line-height: 1.2; font-family: inherit; padding: 16px 0; }
-.entry-hint { font-size: 18px; color: var(--text3); margin-left: 16px; white-space: nowrap; }
-.entry-kb { display: flex; flex-direction: column; gap: 14px; align-items: center; }
-.entry-kb.qwerty { gap: 10px; padding: 16px 0 6px; border-radius: 14px; background: rgba(255,255,255,.04); }
-.entry-row { display: flex; gap: 10px; justify-content: center; flex-wrap: nowrap; }
-.entry-row + .entry-row:last-child { margin-top: 8px; }
-.entry-kb .key { text-transform: none; width: 66px; height: 66px; background: rgba(255,255,255,.07); font-size: 32px; }
-.entry-kb .key.wide { width: auto; min-width: 100px; padding: 0 18px; font-size: 22px; }
-.entry-kb .key.snip { font-size: 20px; min-width: 90px; height: 54px; }
-.entry-kb .key.k-done { background: var(--accent, #e5a00d); color: #000; min-width: 140px; }
-.entry-kb .key.k-del { min-width: 140px; }
-.entry-kb .key.k-shift { min-width: 100px; font-size: 30px; }
-.entry-kb .key.k-shift.on, .entry-kb .key.k-sym.on { background: rgba(255,255,255,.3); }
-.entry-kb .key.k-shift.lock { background: rgba(255,255,255,.5); color: #000; }
-.entry-kb .key.k-space { min-width: 380px; }
-.entry-kb .key.k-del2 { font-size: 28px; }
-.entry-kb .key.focused { transform: scale(1.12); background: #fff; color: #000; }
+/* A translucent card; docked to the left for live search so the results stay visible beside it. */
+.sheet-card.kb-card {
+    width: 1180px; max-height: none; padding: 40px 50px 46px; border-radius: 40px;
+    background: rgba(28, 28, 34, .88); border: 1px solid rgba(255,255,255,.09); box-shadow: 0 50px 120px rgba(0,0,0,.7);
+}
+.sheet-card.kb-card-num { width: 640px; }
+.kb-card > h2 { font-size: 30px; font-weight: 600; color: var(--text2); margin-bottom: 18px; }
+.kb-card .sheet-note { margin-top: -6px; margin-bottom: 22px; }
+.kb-card .sheet-view { display: none; }
+#sheet.kb-dock { justify-content: flex-start; align-items: flex-start; background: linear-gradient(90deg, rgba(0,0,0,.7) 0, rgba(0,0,0,.55) 1000px, rgba(0,0,0,.08) 1240px); }
+#sheet.kb-dock .kb-card { width: 960px; margin: 150px 0 0 64px; padding: 36px 40px 40px; }
+
+/* The input display: big text, a blinking caret, the end of long text kept in view. */
+.kb-display {
+    display: flex; align-items: center; height: 120px; padding: 0 30px; margin-bottom: 30px; border-radius: 24px;
+    background: rgba(0,0,0,.3); border: 3px solid rgba(255,255,255,.1); transition: border-color .15s, background-color .15s;
+}
+.kb-display.focused { border-color: #fff; background: rgba(255,255,255,.1); }
+.kb-line {
+    flex: 1 1 auto; min-width: 0; height: 84px; display: flex; align-items: center; justify-content: flex-end;
+    overflow: hidden; white-space: pre; font-size: 54px; font-weight: 600; color: #fff;
+}
+.kb-val { flex: 0 0 auto; }
+.kb-fill { flex: 1 0 0px; }
+.kb-ph { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; display: none; margin-left: 10px; font-size: 42px; font-weight: 400; color: var(--text3); }
+.kb-display.empty .kb-ph { display: block; }
+.kb-caret {
+    flex: 0 0 4px; width: 4px; height: 62px; margin-left: 4px; border-radius: 2px; background: var(--accent);
+    -webkit-animation: blink 1.1s step-end infinite; animation: blink 1.1s step-end infinite;
+}
+.kb-secret .kb-val { letter-spacing: 6px; }
+.kb-hint {
+    flex: 0 0 auto; margin-left: 24px; padding: 8px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,.16);
+    font-size: 19px; color: var(--text3); white-space: pre;
+}
+.kb-display.focused .kb-hint { color: var(--text); border-color: rgba(255,255,255,.4); }
+.kb-native { display: none; }
+.kb-display.ime .kb-line { display: none; }
+.kb-display.ime .kb-native {
+    display: block; flex: 1 1 auto; min-width: 0; background: transparent; border: 0; outline: 0; padding: 0;
+    font-family: inherit; font-size: 54px; font-weight: 600; color: #fff;
+}
+.kb-pin .kb-line { justify-content: center; }
+.kb-pin .kb-caret, .kb-pin .kb-fill { display: none; }
+.kb-slot { display: inline-block; width: 30px; height: 30px; margin: 0 18px; border-radius: 50%; border: 3px solid var(--text2); vertical-align: middle; }
+.kb-slot.on { background: #fff; border-color: #fff; }
+
+/* Keys on an even grid: columns line up from the digits to the action row. */
+.kb-grid { display: grid; grid-template-columns: repeat(10, 1fr); grid-auto-rows: 80px; grid-gap: 12px; gap: 12px; }
+#sheet.kb-dock .kb-grid { grid-auto-rows: 74px; grid-gap: 10px; gap: 10px; }
+.kb-num .kb-grid { grid-template-columns: repeat(3, 1fr); grid-auto-rows: 108px; grid-gap: 16px; gap: 16px; }
+.kb-w2 { grid-column: span 2; }
+.kb-w3 { grid-column: span 3; }
+.kb-key {
+    display: flex; align-items: center; justify-content: center; border-radius: 16px; white-space: nowrap;
+    background: rgba(255,255,255,.09); color: var(--text); font-size: 36px; font-weight: 500;
+    transition: transform .15s var(--ease), background-color .12s, color .12s;
+}
+.kb-num .kb-key { font-size: 48px; border-radius: 22px; }
+.kb-key.kb-act { background: rgba(255,255,255,.16); font-size: 27px; }
+.kb-key.kb-shift, .kb-key.kb-del { font-size: 34px; }
+.kb-key.kb-shift.on { background: rgba(255,255,255,.34); }
+.kb-key.kb-shift.lock { background: var(--accent); color: #111; }
+.kb-key.kb-sym.on { background: rgba(255,255,255,.34); }
+.kb-key.kb-done { background: var(--accent); color: #111; font-size: 28px; font-weight: 700; }
+.kb-num .kb-key.kb-done { font-size: 34px; }
+.kb-key.focused { background: #fff; color: #111; transform: scale(1.1); box-shadow: 0 12px 30px rgba(0,0,0,.5); z-index: 1; }
+.kb-key.press, .kb-key.focused.press { background: var(--accent); color: #111; transform: scale(.95); transition-duration: .05s; }
+
+/* Address pieces under the keys. */
+.kb-chips { display: flex; justify-content: center; margin-top: 24px; }
+.kb-chips + .kb-chips { margin-top: 12px; }
+.kb-key.kb-chip {
+    height: 54px; padding: 0 22px; margin: 0 6px; border-radius: 27px; font-size: 23px; font-weight: 500;
+    background: transparent; border: 2px solid rgba(255,255,255,.2); color: var(--text2);
+}
+.kb-key.kb-chip.focused { background: #fff; border-color: #fff; color: #111; }
+.kb-key.kb-chip.press { background: var(--accent); border-color: var(--accent); color: #111; }
 
 /* Startup intro: full-screen canvas above everything while it plays. */
 #intro { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; z-index: 9999; background: #000; }

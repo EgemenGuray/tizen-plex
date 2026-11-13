@@ -33,10 +33,37 @@
         if ((key === 'info' || key === 'green') && !UI.sheetOpen() && IPTVUI.options(UI.kit.focused())) return;
         if (key === 'left' || key === 'right' || key === 'up' || key === 'down') UI.move(key);
         else if (key === 'enter') UI.select();
-        else if (key === 'back' && !UI.back()) {
-            try { tizen.application.getCurrentApplication().exit(); } catch (err) { /* browser */ }
-        }
+        else if (key === 'back' && !UI.back()) exitPress();
     });
+
+    // Back on Home asks first; a second Back within 2 seconds leaves the app.
+    var exitArmed = 0;
+    function exitPress() {
+        if (Date.now() - exitArmed < 2000) {
+            exitArmed = 0;
+            Util.screenSaver(true);
+            try { tizen.application.getCurrentApplication().exit(); } catch (err) { /* browser */ }
+            return;
+        }
+        exitArmed = Date.now();
+        Util.toast('Press Back again to exit', 2000);
+    }
+
+    /* App lifecycle: the TV hides the app for Home, Source or another app, and shows it again later. */
+    function lifecycle() {
+        if (document.hidden || document.webkitHidden) {
+            Player.suspend();
+            IPTVPlayer.suspend();
+        } else {
+            Player.resume();
+            IPTVPlayer.resume();
+            // Start the Live TV preview again on the focused channel.
+            var f = UI.kit.focused();
+            if (f && !Player.active() && !IPTVPlayer.active() && document.body.contains(f)) UI.kit.focus(f);
+        }
+    }
+    document.addEventListener('visibilitychange', lifecycle);
+    document.addEventListener('webkitvisibilitychange', lifecycle);
 
     IPTV.init().then(null, function () {});
     UI.start();

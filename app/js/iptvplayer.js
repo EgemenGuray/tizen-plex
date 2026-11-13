@@ -60,6 +60,7 @@ var IPTVPlayer = (function () {
     function pause(on) {
         if (hasAvplay()) { try { if (on) webapis.avplay.pause(); else webapis.avplay.play(); } catch (e) {} }
         else { var v = $('html5-player'); if (on) v.pause(); else v.play(); }
+        Util.screenSaver(!!on);
     }
     function paused() { return hasAvplay() ? webapis.avplay.getState() === 'PAUSED' : $('html5-player').paused; }
     function duration() { try { return hasAvplay() ? webapis.avplay.getDuration() : ($('html5-player').duration || 0) * 1000; } catch (e) { return 0; } }
@@ -178,6 +179,7 @@ var IPTVPlayer = (function () {
                 $('iptv-ui').classList.remove('buffering');
                 status(null);
                 if (atMs > 0 && !isLive()) seek(atMs);
+                Util.screenSaver(false);
                 measure();
                 showOsd();
             }
@@ -207,7 +209,7 @@ var IPTVPlayer = (function () {
             var delay = Math.min(8000, 1000 * Math.pow(2, s.retries - 1));
             status('Reconnecting… (' + s.retries + ')');
             var me = s;
-            setTimeout(function () { if (s === me) load(isLive() ? 0 : s.time); }, delay);
+            setTimeout(function () { if (s === me && !s.suspended) load(isLive() ? 0 : s.time); }, delay);
             return;
         }
         status('The stream stopped (' + err + '). Press OK to try again.');
@@ -463,14 +465,50 @@ var IPTVPlayer = (function () {
         s = null;
         close();
         document.body.classList.remove('playing');
+        Util.screenSaver(true);
         if ($('iptv-ui')) { $('iptv-ui').className = 'hidden'; $('iptv-panel').classList.add('hidden'); $('iptv-sub').innerHTML = ''; }
         if (notify && cur.onExit) cur.onExit();
     }
 
     function stop() { stopInternal(true); }
 
+    /* App lifecycle: when the TV hides the app, save the position and suspend AVPlay (a preview just stops); on return
+     * restore it. Live TV tunes in again (a suspended live stream is stale); films reopen at the saved time if needed. */
+    function suspend() {
+        stopPreview();
+        if (!s || s.suspended) return;
+        var id = resumeID();
+        if (id && s.ready) IPTV.savePosition(id, s.time, duration());
+        clearTimeout(stallTimer); clearTimeout(osdTimer);
+        s.suspended = { wasPaused: s.ready && paused() };
+        if (hasAvplay() && !isLive()) {
+            try { webapis.avplay.suspend(); s.suspended.how = 'suspend'; } catch (e) { close(); s.suspended.how = 'closed'; }
+        } else if (hasAvplay()) { close(); s.suspended.how = 'closed'; }
+        else { $('html5-player').pause(); s.suspended.how = 'paused'; }
+        Util.screenSaver(true);
+    }
+
+    function resume() {
+        if (!s || !s.suspended) return;
+        var sp = s.suspended;
+        s.suspended = null;
+        var reopen = function () { load(isLive() ? 0 : s.time); };
+        if (sp.how === 'closed') reopen();
+        else if (sp.how === 'suspend') {
+            try {
+                webapis.avplay.restore();
+                if (!sp.wasPaused && webapis.avplay.getState() !== 'PLAYING') webapis.avplay.play();
+            } catch (e) { reopen(); return; }
+            if (!sp.wasPaused) Util.screenSaver(false);
+            showOsd();
+        } else {
+            if (!sp.wasPaused) { var p = $('html5-player').play(); if (p && p.catch) p.catch(function () {}); Util.screenSaver(false); }
+            showOsd();
+        }
+    }
+
     return {
-        start: start, handleKey: handleKey, active: function () { return !!s; },
+        start: start, handleKey: handleKey, active: function () { return !!s; }, suspend: suspend, resume: resume,
         startPreview: startPreview, stopPreview: stopPreview, previewing: function () { return preview && preview.channel; }
     };
 })();

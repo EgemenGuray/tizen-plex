@@ -47,7 +47,7 @@ const BASE = process.argv[2], RATE = +(process.argv[3] || 6), NOWORKER = process
   async function openSec(id) {
     return page.evaluate(id => {
       var t0 = performance.now();
-      document.querySelector('[data-id="sec-' + id + '"]')._select();
+      document.querySelector('[data-id="tab-iptv:' + id + '"]')._select();
       return __until(() => document.querySelector('#app .iptv-body') && UI.kit.focused() && document.body.contains(UI.kit.focused()) && !document.querySelector('#app .spinner'))
         .then(__frame).then(() => Math.round(performance.now() - t0));
     }, id);

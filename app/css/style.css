@@ -343,7 +343,8 @@ body.playing #toast { background: rgba(28,28,32,.88); }
     position: absolute; top: -9px; left: 0; width: 6px; height: 28px; margin-left: -3px; border-radius: 3px; background: #fff;
     opacity: 0; transition: opacity .2s, height .2s, top .2s; box-shadow: 0 0 10px rgba(0,0,0,.6);
 }
-#player-ui.paused #osd-head, #player-ui.scrubbing #osd-head { opacity: 1; }
+#player-ui.paused #osd-head, #player-ui.scrubbing #osd-head, #player-ui.seeking #osd-head { opacity: 1; }
+#player-ui.seeking #osd-head { top: -15px; height: 40px; }
 #player-ui.scrubbing #osd-head { top: -15px; height: 40px; }
 #osd-thumb { position: absolute; bottom: 40px; -webkit-transform: translateX(-50%); transform: translateX(-50%); text-align: center; }
 #osd-thumb .img { width: 400px; height: 225px; border-radius: 12px; background: #000 center / cover no-repeat; border: 3px solid rgba(255,255,255,.9); box-shadow: 0 20px 50px rgba(0,0,0,.7); }
@@ -363,10 +364,11 @@ body.playing #toast { background: rgba(28,28,32,.88); }
 #osd-state::after { right: 52px; }
 #player-ui.paused:not(.scrubbing) #osd-state { opacity: 1; -webkit-transform: none; transform: none; }
 #osd-jump {
-    position: absolute; top: 50%; margin-top: -60px; width: 120px; height: 120px; border-radius: 60px; line-height: 120px; text-align: center;
+    position: absolute; top: 50%; margin-top: -60px; min-width: 120px; padding: 0 26px; height: 120px; border-radius: 60px; line-height: 120px; text-align: center; white-space: nowrap;
     font-size: 34px; font-weight: 700; background: rgba(30,30,34,.6); opacity: 0;
 }
 #osd-jump.left { left: 380px; }
+#osd-jump.hold { opacity: 1; }
 #osd-jump.right { right: 380px; }
 #osd-jump.go { -webkit-animation: jump .8s var(--ease); animation: jump .8s var(--ease); }
 @-webkit-keyframes jump { 0% { opacity: 0; -webkit-transform: scale(.7); } 25% { opacity: 1; -webkit-transform: scale(1); } 100% { opacity: 0; } }
@@ -424,7 +426,8 @@ body.playing #toast { background: rgba(28,28,32,.88); }
 @-webkit-keyframes panel-in { from { opacity: 0; -webkit-transform: translateY(-60px); } }
 @keyframes panel-in { from { opacity: 0; transform: translateY(-60px); } }
 #player-ui.panel-open #osd-top, #player-ui.panel-open #osd-bottom { opacity: 0; }
-#player-ui.scrubbing #osd-kicker, #player-ui.scrubbing #osd-title, #player-ui.scrubbing #osd-badges { opacity: 0; }
+#player-ui.scrubbing #osd-kicker, #player-ui.scrubbing #osd-title, #player-ui.scrubbing #osd-badges,
+#player-ui.seeking #osd-kicker, #player-ui.seeking #osd-title, #player-ui.seeking #osd-badges { opacity: 0; }
 #osd-kicker, #osd-title, #osd-badges { transition: opacity .25s; }
 .p-tabs { display: flex; justify-content: center; gap: 8px; }
 .p-tab { padding: 12px 34px; border-radius: 40px; font-size: 27px; font-weight: 500; color: var(--text2); transition: transform .2s var(--ease), background-color .2s; }
@@ -447,6 +450,30 @@ body.playing #toast { background: rgba(28,28,32,.88); }
 .p-ch.current .img { box-shadow: 0 0 0 4px rgba(255,255,255,.55); }
 .p-ch .t { font-size: 23px; margin-top: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .p-ch .s { font-size: 20px; color: var(--text3); }
+/* Audio & Subtitles: two columns side by side, each scrolling on its own */
+.p-cols { display: flex; justify-content: center; gap: 40px; margin-top: 30px; }
+.p-col { width: 1180px; max-height: 720px; overflow: hidden; padding: 6px 12px; }
+.p-cols.two .p-col { width: 820px; }
+.p-cols.two .p-row { padding-top: 11px; padding-bottom: 11px; }
+.p-col .p-list { width: auto; max-height: none; margin: 0; padding: 0; overflow: visible; transition: transform .25s var(--ease); }
+.p-cols.two .p-col { opacity: .62; transition: opacity .2s; }
+.p-cols.two .p-col.active { opacity: 1; }
+.p-head { font-size: 20px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text3); padding: 18px 26px 6px 72px; }
+.p-head:first-child { padding-top: 4px; }
+.p-row.p-btn { margin: 12px 0 6px; background: rgba(255,255,255,.1); }
+.p-row.p-btn.focused { background: #fff; }
+
+/* playback error */
+#perror { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; background: rgba(0,0,0,.72); display: flex; align-items: center; justify-content: center; }
+.pe-card { width: 1100px; padding: 50px 60px; border-radius: 30px; background: rgba(30,30,34,.96); box-shadow: 0 30px 80px rgba(0,0,0,.7); text-align: center;
+    -webkit-animation: sheet-in .35s var(--ease); animation: sheet-in .35s var(--ease); }
+.pe-t { font-size: 40px; font-weight: 700; }
+.pe-m { font-size: 25px; color: var(--text2); margin-top: 14px; word-wrap: break-word; }
+.pe-note { font-size: 22px; color: var(--text3); margin-top: 14px; line-height: 1.4; }
+.pe-btns { display: flex; justify-content: center; gap: 18px; margin-top: 38px; }
+.pe-btn { padding: 16px 34px; border-radius: 14px; background: rgba(255,255,255,.12); font-size: 27px; font-weight: 600; transition: transform .2s var(--ease), background-color .15s; }
+.pe-btn.focused { background: #fff; color: #000; -webkit-transform: scale(1.08); transform: scale(1.08); }
+
 .p-info { display: flex; gap: 44px; width: 1500px; margin: 36px auto 0; }
 .p-poster { flex: 0 0 200px; height: 300px; border-radius: 12px; background: #222 center / cover; }
 .p-text { flex: 1; }
@@ -724,3 +751,16 @@ body.iptv-preview .pv-box { background: transparent; box-shadow: none; }
 #iptv-spinner { position: absolute; left: 50%; top: 50%; width: 80px; height: 80px; margin: -40px 0 0 -40px; border-radius: 50%; display: none;
     border: 6px solid rgba(255,255,255,.2); border-top-color: #fff; -webkit-animation: spin 1s linear infinite; animation: spin 1s linear infinite; }
 #iptv-ui.buffering #iptv-spinner { display: block; }
+
+/* ---------- search history, A–Z, card menu ---------- */
+
+.recent { width: 1000px; padding: 20px 120px 0; }
+.recent:empty { display: none; }
+.recent h2 { font-size: 24px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text3); margin: 10px 0 8px 28px; }
+.recent .sheet-row .check { color: var(--text3); }
+.recent .sheet-row.focused .check { color: rgba(0,0,0,.5); }
+.recent .clear-recent { color: var(--text2); margin-top: 8px; }
+.az-wrap { padding: 10px 20px 20px; }
+.az-row { display: flex; justify-content: center; gap: 12px; margin: 8px 0; }
+.az-row .key { width: 92px; height: 86px; background: rgba(255,255,255,.08); }
+.az-row .key.focused { background: #fff; }

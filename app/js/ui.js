@@ -219,6 +219,7 @@ var UI = (function () {
         c.appendChild(img);
         c.appendChild(el('div', 'cap', '<div class="t">' + Util.esc(title) + '</div><div class="s">' + Util.esc(sub) + '</div>'));
         c._select = onSelect || function () { openItem(item); };
+        if (CARD_MENU_TYPES.indexOf(item.type) >= 0 && item.ratingKey) c._menu = function () { cardMenu(item, opts); };
         if (kind === 'poster' || kind === 'wide') c._focus = function () { if (artOf(item)) softBackdrop(item); };
         return c;
     }
@@ -238,6 +239,52 @@ var UI = (function () {
         else if (item.type === 'season') push(function (p) { return showScreen(p, item.parentRatingKey, item.ratingKey); });
         else if (item.type === 'collection') push(function (p) { return gridScreen(p, item.title, Plex.collectionItems(item.ratingKey)); });
         else push(function (p) { return detailsScreen(p, item.ratingKey); });
+    }
+
+    /* Card menu: hold OK (or press Info) on a movie, show, season or episode card. */
+    var CARD_MENU_TYPES = ['movie', 'episode', 'show', 'season'];
+    function cardMenu(item, opts) {
+        opts = opts || {};
+        var at = focusables().indexOf(focused);
+        var playable = item.type === 'movie' || item.type === 'episode';
+        var watched = playable ? !!item.viewCount : !!(item.leafCount && item.viewedLeafCount >= item.leafCount);
+        var resume = playable && item.viewOffset && item.duration;
+        // Re-render the screen (the row's contents may change) with focus back on the same place in the row.
+        function refresh() {
+            if (stack.length) stack[stack.length - 1].focusIndex = at;
+            show();
+        }
+        var rows = [];
+        rows.push({ label: resume ? 'Resume' : 'Play', detail: resume ? Util.fmtDuration(item.duration - item.viewOffset) + ' left' : '', action: function () {
+            if (item.type !== 'season') return playKey(item.ratingKey, false);
+            // A season plays its first unwatched episode.
+            Plex.children(item.ratingKey).then(function (eps) {
+                var ep = eps.filter(function (e) { return !e.viewCount; })[0] || eps[0];
+                if (ep) playKey(ep.ratingKey, false);
+            }, function (e) { Util.toast(e.message, 6000); });
+        } });
+        if (playable) rows.push({ label: 'Play from Beginning', action: function () { playKey(item.ratingKey, true); } });
+        rows.push({ label: watched ? 'Mark Unwatched' : 'Mark Watched', action: function () {
+            Plex.markWatched(item, !watched).then(function () {
+                Util.toast((watched ? 'Marked unwatched: ' : 'Marked watched: ') + item.title, 3000);
+                refresh();
+            }, function (e) { Util.toast(e.message, 6000); });
+        } });
+        if (opts.onDeck) rows.push({ label: 'Remove from Continue Watching', action: function () {
+            Plex.removeFromContinueWatching(item).then(function () { Util.toast('Removed from Continue Watching', 3000); refresh(); },
+                function (e) { Util.toast(e.message, 6000); });
+        } });
+        if (item.type === 'episode') {
+            rows.push({ label: 'Go to Show', detail: item.grandparentTitle, action: function () { push(function (p) { return showScreen(p, item.grandparentRatingKey); }); } });
+            rows.push({ label: 'Go to Season', detail: item.parentTitle || ('Season ' + item.parentIndex), action: function () {
+                push(function (p) { return showScreen(p, item.grandparentRatingKey, item.parentRatingKey); });
+            } });
+        } else if (item.type === 'season') {
+            rows.push({ label: 'Go to Show', detail: item.parentTitle, action: function () { push(function (p) { return showScreen(p, item.parentRatingKey, item.ratingKey); }); } });
+        }
+        rows.push({ label: 'More Info', action: function () { openItem(item); } });
+        var title = item.type === 'episode' ? item.grandparentTitle + ' · ' + epCode(item) : item.type === 'season' ? (item.parentTitle || '') + ' · ' + item.title : item.title;
+        openSheet(title, rows);
     }
 
     /* ---------- modal sheet ---------- */
@@ -1127,7 +1174,7 @@ var UI = (function () {
                 ls.forEach(function (l, n) { r[n + 1].slice(0, 4).forEach(addHero); });
                 if (heroItems.length) page.appendChild(hero(heroItems));
                 else backdrop(null, 'plain');
-                if (deck.length) page.appendChild(shelf('Continue Watching', deck, 'wide'));
+                if (deck.length) page.appendChild(shelf('Continue Watching', deck, 'wide', { onDeck: true }));
                 ls.forEach(function (l, n) {
                     if (r[n + 1].length) page.appendChild(shelf('Recently Added in ' + l.title, r[n + 1], 'poster'));
                 });
@@ -1172,6 +1219,7 @@ var UI = (function () {
                 });
             }, 'pill' + (st.genre ? ' on' : ''), 'p-genre'));
             pills.appendChild(button('Collections', function () { st.view = st.view === 'collections' ? 'all' : 'collections'; show(); }, 'pill' + (st.view === 'collections' ? ' on' : ''), 'p-coll'));
+            if (st.sort === 'titleSort' && st.view !== 'collections') pills.appendChild(button('A–Z', jumpToLetter, 'pill', 'p-az'));
             head.appendChild(el('h1', 'page-title', Util.esc(sec.title) + ' <span class="count"></span>'));
             head.appendChild(pills);
             page.appendChild(head);
@@ -1187,12 +1235,12 @@ var UI = (function () {
                 });
             }
             // Load in pages so big libraries open quickly; more is fetched as focus nears the end.
-            var PAGE = 120, loaded = 0, total = Infinity, loading = false;
-            function more() {
-                if (loading || loaded >= total) return Promise.resolve();
-                loading = true;
-                return Plex.sectionItems(sec.key, { sort: st.sort, unwatched: st.unwatched, genre: st.genre, start: loaded, size: PAGE }).then(function (mc) {
-                    loading = false;
+            var PAGE = 120, loaded = 0, total = Infinity, loading = null;
+            function more(size) {
+                if (loading) return loading;
+                if (loaded >= total) return Promise.resolve();
+                loading = Plex.sectionItems(sec.key, { sort: st.sort, unwatched: st.unwatched, genre: st.genre, start: loaded, size: size || PAGE }).then(function (mc) {
+                    loading = null;
                     var items = mc.Metadata || [];
                     total = mc.totalSize != null ? mc.totalSize : loaded + items.length;
                     head.querySelector('.count').textContent = total;
@@ -1205,12 +1253,49 @@ var UI = (function () {
                     });
                     loaded += items.length;
                     if (!items.length) total = loaded;
-                }, function (e) { loading = false; throw e; });
+                }, function (e) { loading = null; throw e; });
+                return loading;
+            }
+            // Load the grid up to item n (one request for the gap), so a letter far down the list can take focus.
+            function loadUntil(n) {
+                if (loaded > n || loaded >= total) return Promise.resolve();
+                return more(Math.max(PAGE, n + 1 - loaded + 40)).then(function () { return loadUntil(n); });
+            }
+            // A–Z: Plex counts the titles under each first letter; the running total is where that letter starts.
+            function jumpToLetter() {
+                Plex.firstCharacter(sec.key, { unwatched: st.unwatched, genre: st.genre }).then(function (chars) {
+                    var at = 0, letters = [];
+                    chars.forEach(function (c) {
+                        if (c.size > 0) letters.push({ title: c.title || c.key, at: at });
+                        at += c.size || 0;
+                    });
+                    if (!letters.length) { Util.toast('Nothing to jump to.'); return; }
+                    letterPicker(letters, function (c) {
+                        Util.toast('Loading ' + c.title + '…', 1500);
+                        loadUntil(c.at).then(function () {
+                            var cards = grid.querySelectorAll('.card');
+                            focus(cards[Math.min(c.at, cards.length - 1)]);
+                        }, function (e) { Util.toast(e.message, 6000); });
+                    });
+                }, function (e) { Util.toast(e.message, 6000); });
             }
             return more().then(function () {
                 if (!loaded) page.appendChild(el('p', 'muted pad', 'Nothing here with these filters.'));
             });
         });
+    }
+
+    // Letters in rows of nine, like a keyboard; picking one closes the sheet and calls cb.
+    function letterPicker(letters, cb) {
+        var wrap = el('div', 'az-wrap');
+        var row = null;
+        letters.forEach(function (c, i) {
+            if (i % 9 === 0) { row = el('div', 'hlist az-row'); wrap.appendChild(row); }
+            var k = el('div', 'key focusable', Util.esc(c.title));
+            k._select = function () { closeSheet(true); cb(c); };
+            row.appendChild(k);
+        });
+        openSheet('Jump to Letter', [], { footer: wrap });
     }
 
     function gridScreen(page, title, promise) {
@@ -1506,11 +1591,29 @@ var UI = (function () {
             box.appendChild(q);
             box.appendChild(kbWrap);
             page.appendChild(box);
+            var recent = el('div', 'recent');
+            page.appendChild(recent);
             var grid = el('div', 'grid');
             page.appendChild(grid);
 
             function drawQ() { q.innerHTML = searchState.q ? Util.esc(searchState.q) + '<i class="caret"></i>' : '<span class="muted">Movies, shows, episodes, collections</span><i class="caret"></i>'; }
+            // With nothing typed: the last ten searches, newest first, and a way to clear them.
+            function drawRecent() {
+                recent.innerHTML = '';
+                var hist = searchState.q ? [] : recentSearches();
+                if (!hist.length) return;
+                recent.appendChild(el('h2', '', 'Recent Searches'));
+                hist.forEach(function (t) {
+                    var r = el('div', 'sheet-row focusable', '<span class="check">⌕</span><span class="lbl">' + Util.esc(t) + '</span>');
+                    r._select = function () { searchState.q = t; rememberSearch(t); drawQ(); drawRecent(); focus(keys.firstChild); run(); };
+                    recent.appendChild(r);
+                });
+                var clr = el('div', 'sheet-row focusable clear-recent', '<span class="check"></span><span class="lbl">Clear Recent Searches</span>');
+                clr._select = function () { Util.store('searchHistory', null); drawRecent(); focus(keys.firstChild); };
+                recent.appendChild(clr);
+            }
             function drawResults() {
+                drawRecent();
                 grid.innerHTML = '';
                 searchState.results.forEach(function (it) { grid.appendChild(card(it, 'poster')); });
                 if (searchState.q.length > 1 && !searchState.results.length) grid.appendChild(el('p', 'muted', 'No results'));
@@ -1526,7 +1629,7 @@ var UI = (function () {
             // The same keyboard as everywhere else, docked to the left: the results follow each key press beside it.
             function typed(t) { searchState.q = t; drawQ(); run(); }
             [['⌕  Type to search', function () {
-                textEntry('Search Plex', searchState.q, typed, null, { live: typed, dock: true, placeholder: 'Movies, shows, episodes, collections' });
+                textEntry('Search Plex', searchState.q, function (t) { rememberSearch(t); typed(t); }, null, { live: typed, dock: true, placeholder: 'Movies, shows, episodes, collections' });
             }], ['Clear', function () { searchState.q = ''; drawQ(); run(); }]].forEach(function (k) {
                 var b = el('div', 'key wide focusable', k[0]);
                 b._select = k[1];
@@ -1535,6 +1638,15 @@ var UI = (function () {
             keys.firstChild.setAttribute('data-autofocus', '');
             drawQ(); drawResults();
         });
+    }
+
+    function recentSearches() { var h = Util.store('searchHistory'); return h && h.length ? h : []; }
+    function rememberSearch(term) {
+        term = (term || '').trim();
+        if (term.length < 2) return;
+        var h = recentSearches().filter(function (x) { return x.toLowerCase() !== term.toLowerCase(); });
+        h.unshift(term);
+        Util.store('searchHistory', h.slice(0, 10));
     }
 
     /* ---------- settings ---------- */
@@ -1640,19 +1752,19 @@ var UI = (function () {
                 openSheet('Sound Setup for the Q990C', [{ html:
                     '<p>Settings → Sound → Sound Output → <b>Receiver (HDMI-eARC)</b></p>' +
                     '<p>Settings → Sound → Expert Settings → <b>HDMI-eARC Mode: Auto</b>, <b>Digital Output Audio Format: Passthrough</b></p>' +
-                    '<p>The soundbar display shows "Dolby Atmos" when it receives an Atmos bitstream. If a TrueHD track plays silent, press <b>Yellow</b> during playback.</p>' +
+                    '<p>The soundbar display shows "Dolby Atmos" when it receives an Atmos bitstream. If a TrueHD track plays silent, press <b>▼</b> during playback and choose <b>Convert audio on the server</b>.</p>' +
                     '<p>Audio out of sync? Use the TV\'s Settings → Sound → Expert Settings → <b>Digital Output Audio Delay</b>; apps can\'t shift audio on Tizen.</p>' }, { label: 'Close' }], { wide: true });
             }, 'help');
             row('Remote control', '', function () {
                 openSheet('During Playback', [{ html:
                     '<div class="kv"><b>OK</b><span>Play / pause, or press the button on screen (Skip Intro, Play Next)</span></div>' +
-                    '<div class="kv"><b>◀ ▶</b><span>Back 10 s / forward 30 s. While paused: scrub with preview thumbnails, OK to jump</span></div>' +
-                    '<div class="kv"><b>▼ or Info</b><span>Info, chapters, audio, subtitles and picture</span></div>' +
+                    '<div class="kv"><b>◀ ▶</b><span>Back 10 s / forward 30 s. Quick presses add up (+90 s) and seek once. While paused: scrub with preview thumbnails, OK to jump</span></div>' +
+                    '<div class="kv"><b>▼ or Info</b><span>Audio &amp; Subtitles side by side (◀ ▶ between them): audio tracks, Convert audio on the server, version, subtitles, Search online…, subtitle delay. Then Chapters, Picture, Info</span></div>' +
                     '<div class="kv"><b>▲</b><span>Show the timeline</span></div>' +
                     '<div class="kv"><b>CH ▲ / ▼</b><span>Next / previous chapter</span></div>' +
-                    '<div class="kv"><b>Yellow</b><span>Switch between direct play and server-converted audio</span></div>' +
-                    '<div class="kv"><b>Blue / Green</b><span>Audio tracks / subtitles</span></div>' +
-                    '<div class="kv"><b>Back</b><span>Close a panel, or stop</span></div>' }, { label: 'Close' }], { wide: true });
+                    '<div class="kv"><b>Back</b><span>Close the panel, or stop</span></div>' +
+                    '<p class="muted">Browsing: hold OK (or press Info) on a poster for Play, Play from Beginning, Mark Watched, Go to Show and more.</p>' +
+                    '<p class="muted">Remotes with colour keys: Yellow switches between direct play and converted audio, Blue / Green open audio / subtitles, Red opens Picture.</p>' }, { label: 'Close' }], { wide: true });
             }, 'keys');
             if (plex) row('Sign out', '', function () { Plex.signOut(); libs = null; replace(signInScreen); }, 'signout');
             col.appendChild(el('p', 'muted small', 'Player: ' + Util.esc(Player.engineName()) + ' · Server: ' + Util.esc(Plex.state.server ? Plex.state.server.uri : '-')));
@@ -1692,6 +1804,9 @@ var UI = (function () {
     return {
         start: start, move: move, select: select, back: back, settings: settings,
         play: play, sheetOpen: function () { return !!sheet; },
+        // Card menu (hold OK or Info on a Plex card).
+        hasMenu: function () { return !sheet && !!focused && !!focused._menu && app().contains(focused); },
+        menu: function () { if (sheet || !focused || !focused._menu) return false; focused._menu(); return true; },
         // Building blocks for the Live TV (IPTV) screens in iptvui.js.
         kit: {
             el: el, button: button, lazyImg: lazyImg, push: push, replace: replace, show: show, nav: nav, focus: focus, refocus: refocus,

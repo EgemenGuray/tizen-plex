@@ -321,7 +321,7 @@ var UI = (function () {
         cardEl.appendChild(view);
         if (opts.footer) cardEl.appendChild(opts.footer);
         host.appendChild(cardEl);
-        host.classList.remove('hidden');
+        host.className = opts.host || '';   // also shows it
         sheet = { el: cardEl, prev: focused, onClose: opts.onClose };
         if (focused) focused.classList.remove('focused');
         focused = null;
@@ -350,200 +350,494 @@ var UI = (function () {
         }), { note: note });
     }
 
-    /* Free text entry: the TV's own keyboard (which the SmartThings phone app can also type into), plus an on-screen
-     * QWERTY keyboard laid out as a grid for typing with the remote's arrow keys. Shortcuts cover the usual pieces of addresses. */
-    var nativeInput = null;
-    function textEntry(title, value, cb, note) {
-        var text = value || '';
+    /* ---------- on-screen keyboard ---------- */
+
+    /* Free text entry, Apple TV style: a large input display over an even 10-column QWERTY grid made for the remote's
+     * arrow keys. The columns line up, so Up/Down keep their column (the wide keys of the action row remember where you
+     * came from) and Left/Right wrap within a row. OK on the input display opens the TV's own keyboard, which the
+     * SmartThings phone app can also type into. Address fields get a row of URL pieces, number fields a big keypad.
+     * The keys are built once per open; moving the focus only moves a class.
+     * opts (optional): { kind: 'text' | 'url' | 'secret' | 'number', live: fn(text) on every change (Back undoes it),
+     *                    placeholder, dock: true to sit on the left so live results stay visible beside it } */
+    var nativeInput = null;   // the TV keyboard while it is open: { field, submit, close }
+    var entry = null;         // the open on-screen keyboard: { card, type, del, numeric }
+
+    var KB_LAYERS = {
+        letters: ['qwertyuiop', 'asdfghjkl\'', 'zxcvbnm.-_'],
+        url: ['qwertyuiop', 'asdfghjkl/', 'zxcvbnm.-_'],
+        symbols: ['!?&%+=~#*$', '()[]{}<>"\'', '@:/\\|^`,;€']
+    };
+    var KB_CHIPS = [['http://', 'https://', '.com', '.net', '.tv', ':8080'], ['/', ':', '@', '/get.php?username=', '&password=']];
+
+    // What a field holds, from its title, for the call sites that don't say.
+    function entryKind(title, value) {
+        var t = String(title || '');
+        if (/password|passcode/i.test(t)) return 'secret';
+        if (/^(search|rename)\b/i.test(t)) return 'text';
+        if (/\bport\b|\bnumber\b/i.test(t)) return 'number';
+        if (/address|\burl\b|server|playlist|guide|epg|m3u|\bhost\b/i.test(t) || /^https?:\/\//i.test(value || '')) return 'url';
+        return 'text';
+    }
+
+    function textEntry(title, value, cb, note, opts) {
+        opts = opts || {};
+        var fromSheet = !!sheet;   // a form on a sheet (Add Playlist) is replaced by the keyboard
+        keyboard(title, value || '', note, {
+            kind: opts.kind || entryKind(title, value), live: opts.live, placeholder: opts.placeholder, dock: opts.dock,
+            onDone: cb,
+            onCancel: function (original, text) {
+                if (opts.live && text !== original) opts.live(original);
+                if (fromSheet) cb(original);   // bring the form back as it was
+            }
+        });
+    }
+
+    // Number pad for PINs: four digits, sent as soon as the fourth is in.
+    function pinPad(title, cb) {
+        keyboard(title, '', null, { kind: 'pin', max: 4, autoSubmit: true, onDone: cb, onCancel: function () {} });
+    }
+
+    function keyboard(title, value, note, o) {
+        var kind = o.kind, pin = kind === 'pin', numeric = pin || kind === 'number', secret = pin || kind === 'secret';
+        var original = value, text = numeric ? value.replace(/\D/g, '') : value;
+        var submitted = false, closed = false;
+        var rows = [];    // navigation: rows of { el, c, w } in grid columns; row 0 is the input display
+        var cols = numeric ? 3 : 10;
+        var col = 0;      // the column Up/Down aim for: the centre of the last key reached sideways
+        var shift = false, caps = false, sym = false;
+        var me;
+
+        var wrap = el('div', 'kb' + (numeric ? ' kb-num' : '') + (pin ? ' kb-pin' : '') + (secret ? ' kb-secret' : ''));
+
+        /* The input display. The flex line keeps the end of long text in view: once it overflows, the start is cut. */
         var field = document.createElement('input');
-        field.type = 'text';
-        field.className = 'entry-native';
+        field.type = secret ? 'password' : 'text';
+        field.className = 'kb-native';
         field.setAttribute('autocomplete', 'off');
         field.setAttribute('autocapitalize', 'off');
         field.setAttribute('spellcheck', 'false');
-        field.value = text;
-        var fieldBox = el('div', 'entry-field focusable');
-        fieldBox.appendChild(field);
-        fieldBox.appendChild(el('span', 'entry-hint', 'OK: TV keyboard'));
-        fieldBox._select = function () { nativeInput = { field: field, done: function () { text = field.value; draw(); } }; field.focus(); };
-        field.addEventListener('input', function () { text = field.value; });
-        /* A QWERTY grid for the remote's arrow keys: every key is one press away from its neighbours (rows wrap
-         * at the ends). Delete sits top right as on a computer, Done bottom right, the address pieces below. */
-        var LAYERS = {
-            letters: ['1234567890', 'qwertyuiop@', 'asdfghjkl:/', 'zxcvbnm.-_'],
-            symbols: ['1234567890', '!?&%+=~#*$€', '()[]{}<>\'";', '\\|^`.,-_@:']
-        };
-        var shift = false, caps = false, sym = false;
-        var kb = el('div', 'entry-kb qwerty');
-        var keyEls = [];   // [row][col] -> key whose character follows the layer
-        function row() { var r = el('div', 'entry-row hlist'); r._edge = wrap(r); kb.appendChild(r); return r; }
-        function wrap(r) {
-            return function (dir) {
-                var ks = r.querySelectorAll('.focusable');
-                focus(dir === 'right' ? ks[0] : ks[ks.length - 1]);
-            };
-        }
-        function key(r, label, cls, action) {
-            var b = el('div', 'key focusable' + (cls ? ' ' + cls : ''), label);
-            b._select = action;
-            r.appendChild(b);
+        if (numeric) field.setAttribute('inputmode', 'numeric');
+        if (o.max) field.maxLength = o.max;
+        var disp = el('div', 'kb-display focusable');
+        var line = el('div', 'kb-line');
+        var val = el('span', 'kb-val');
+        var ph = el('span', 'kb-ph', Util.esc(o.placeholder || (kind === 'url' ? 'http://server:port' : numeric ? '' : 'Type with the remote')));
+        line.appendChild(val);
+        line.appendChild(el('i', 'kb-caret'));
+        line.appendChild(ph);
+        line.appendChild(el('i', 'kb-fill'));
+        disp.appendChild(line);
+        disp.appendChild(field);
+        if (!pin) disp.appendChild(el('span', 'kb-hint', 'OK  TV keyboard'));
+        disp._select = openIme;
+        wrap.appendChild(disp);
+        cell(0, disp, 0, cols);
+
+        var grid = el('div', 'kb-grid');
+        wrap.appendChild(grid);
+        var letterKeys = [];   // the 30 keys that change with shift and the symbols page
+        var shiftKey = null, symKey = null;
+
+        function key(parent, r, c, w, label, cls, action) {
+            var b = el('div', 'kb-key focusable' + (w > 1 ? ' kb-w' + w : '') + (cls ? ' ' + cls : ''), label);
+            b._select = function () { flash(b); action(b); };
+            parent.appendChild(b);
+            cell(r, b, c, w);
             return b;
         }
-        function charKey(r, ri, ci) {
-            var b = key(r, '', 'ch', function () {
-                type(b.textContent);
-                if (shift && !caps) { shift = false; relabel(); }
-            });
-            keyEls[ri] = keyEls[ri] || [];
-            keyEls[ri][ci] = b;
+        function cell(r, b, c, w) {
+            rows[r] = rows[r] || [];
+            rows[r].push({ el: b, c: c, w: w });
+            b._nav = navFor(r, rows[r].length - 1);
         }
-        LAYERS.letters.forEach(function (chars, ri) {
-            var r = row();
-            if (ri === 3) {
-                key(r, '⇧', 'wide k-shift', function () {
-                    // One press: next letter in capitals. Again: caps lock. Again: off.
-                    if (!shift) { shift = true; caps = false; } else if (!caps) caps = true; else { shift = false; caps = false; }
-                    relabel();
+
+        if (numeric) {
+            ['123', '456', '789'].forEach(function (s, ri) {
+                for (var ci = 0; ci < 3; ci++) digitKey(ri + 1, ci, s.charAt(ci));
+            });
+            key(grid, 4, 0, 1, '⌫', 'kb-act kb-del', del);
+            digitKey(4, 1, '0');
+            key(grid, 4, 2, 1, pin ? '✓' : 'Done', 'kb-done', done);
+        } else {
+            for (var d = 0; d < 10; d++) digitKey(1, d, '1234567890'.charAt(d));
+            for (var r = 0; r < 3; r++) {
+                for (var c = 0; c < 10; c++) {
+                    letterKeys.push(key(grid, r + 2, c, 1, '', 'kb-ch', function (b) {
+                        type(b.textContent);
+                        if (shift && !caps) { shift = false; relabel(); }
+                    }));
+                }
+            }
+            shiftKey = key(grid, 5, 0, 1, '⇧', 'kb-act kb-shift', function () {
+                // Once: the next letter in capitals. Twice: caps lock. Again: off.
+                if (!shift) { shift = true; caps = false; } else if (!caps) caps = true; else { shift = false; caps = false; }
+                relabel();
+            });
+            symKey = key(grid, 5, 1, 1, '#+=', 'kb-act kb-sym', function () { sym = !sym; relabel(); });
+            key(grid, 5, 2, 3, 'Space', 'kb-act kb-space', function () { type(' '); });
+            key(grid, 5, 5, 2, '⌫', 'kb-act kb-del', del);
+            key(grid, 5, 7, 1, 'Clear', 'kb-act kb-clear', function () { if (text) { text = ''; changed(); } });
+            key(grid, 5, 8, 2, 'Done', 'kb-done', done);
+            if (kind === 'url') {
+                KB_CHIPS.forEach(function (chips, i) {
+                    var rowEl = el('div', 'kb-chips');
+                    wrap.appendChild(rowEl);
+                    chips.forEach(function (t, j) {
+                        // Placed by their measured position on the first move into a chip row.
+                        key(rowEl, 6 + i, j * cols / chips.length, cols / chips.length, Util.esc(t), 'kb-chip', function () { type(t); });
+                    });
                 });
             }
-            for (var ci = 0; ci < chars.length; ci++) charKey(r, ri, ci);
-            if (ri === 0) key(r, '⌫ Delete', 'wide k-del', function () { text = text.slice(0, -1); draw(); });
-            if (ri === 3) key(r, '⌫', 'k-del2', function () { text = text.slice(0, -1); draw(); });
-        });
-        var bottom = row();
-        var symKey = key(bottom, '#+=', 'wide k-sym', function () { sym = !sym; relabel(); });
-        key(bottom, 'Space', 'wide k-space', function () { type(' '); });
-        key(bottom, 'Clear', 'wide', function () { text = ''; draw(); });
-        key(bottom, 'Done', 'wide k-done', function () { done(); });
-        var snips = row();
-        ['http://', 'https://', 'www.', '.com', '.net', '.org', ':8080', '.m3u', '.m3u8'].forEach(function (t) {
-            key(snips, t, 'wide snip', function () { type(t); });
-        });
+            relabel();
+        }
+
+        function digitKey(r, c, ch) { key(grid, r, c, 1, ch, 'kb-ch kb-digit', function () { type(ch); }); }
+
         function relabel() {
-            var layer = sym ? LAYERS.symbols : LAYERS.letters;
-            keyEls.forEach(function (ks, ri) {
-                ks.forEach(function (b, ci) {
-                    var c = layer[ri].charAt(ci);
-                    b.textContent = shift && !sym ? c.toUpperCase() : c;
-                });
+            var layer = sym ? KB_LAYERS.symbols : kind === 'url' ? KB_LAYERS.url : KB_LAYERS.letters;
+            letterKeys.forEach(function (b, i) {
+                var ch = layer[Math.floor(i / 10)].charAt(i % 10);
+                if (shift && !sym) ch = ch.toUpperCase();
+                if (b.textContent !== ch) b.textContent = ch;
             });
-            var sh = kb.querySelector('.k-shift');
-            sh.classList.toggle('on', shift && !sym);
-            sh.classList.toggle('lock', caps && !sym);
-            sh.textContent = caps ? '⇪' : '⇧';
+            shiftKey.classList.toggle('on', shift && !sym);
+            shiftKey.classList.toggle('lock', caps && !sym);
+            shiftKey.textContent = caps && !sym ? '⇪' : '⇧';
             symKey.textContent = sym ? 'abc' : '#+=';
             symKey.classList.toggle('on', sym);
         }
-        function type(t) { text += t; draw(); }
+
+        /* Navigation: explicit, so nothing is measured on a key press (except the chip rows, once). */
+        var chipsPlaced = false;
+        function placeChips() {
+            if (chipsPlaced || rows.length < 7) return;
+            chipsPlaced = true;
+            var g = grid.getBoundingClientRect();
+            for (var r = 6; r < rows.length; r++) {
+                rows[r].forEach(function (k) {
+                    var b = k.el.getBoundingClientRect();
+                    k.c = (b.left - g.left) / g.width * cols;
+                    k.w = b.width / g.width * cols;
+                });
+            }
+        }
+        function navFor(r, i) {
+            function side(step) {
+                return function () {
+                    var row = rows[r], k = row[(i + step + row.length) % row.length];
+                    if (r > 0) col = k.c + k.w / 2;
+                    return k.el;
+                };
+            }
+            function vert(step) {
+                return function () {
+                    var t = r + step;
+                    if (t < 0 || t >= rows.length) return focused;
+                    if (t >= 6 || r >= 6) placeChips();
+                    var best = null, bd = 1e9;
+                    rows[t].forEach(function (k) {
+                        var dist = col < k.c ? k.c - col : col >= k.c + k.w ? col - (k.c + k.w) + 0.001 : -1;
+                        if (dist < bd) { bd = dist; best = k; }
+                    });
+                    return best.el;
+                };
+            }
+            return { left: side(-1), right: side(1), up: vert(-1), down: vert(1) };
+        }
+
+        function flash(b) {
+            b.classList.add('press');
+            clearTimeout(b._flash);
+            b._flash = setTimeout(function () { b.classList.remove('press'); }, 150);
+        }
+
+        /* Text */
         function draw() {
             if (field.value !== text) field.value = text;
-            // Keep the end of long addresses in view.
-            field.scrollLeft = field.scrollWidth;
+            if (pin) {
+                var s = '';
+                for (var i = 0; i < o.max; i++) s += '<i class="kb-slot' + (i < text.length ? ' on' : '') + '"></i>';
+                val.innerHTML = s;
+            } else {
+                val.textContent = secret ? text.replace(/[\s\S]/g, '•') : text;
+            }
+            disp.classList.toggle('empty', !text);
         }
-        function done() { nativeInput = null; closeSheet(); cb(text); }
-        relabel();
-        var foot = el('div', 'entry-wrap');
-        foot.appendChild(fieldBox);
-        foot.appendChild(kb);
-        entry = { type: type, del: function () { text = text.slice(0, -1); draw(); }, done: done };
-        openSheet(title, [], { footer: foot, wide: true, note: note, onClose: function () { nativeInput = null; entry = null; } });
+        function changed() { draw(); if (o.live) o.live(text); }
+        function type(t) {
+            if (numeric) t = t.replace(/\D/g, '');
+            if (!t || submitted || (o.max && text.length >= o.max)) return;
+            text += t;
+            changed();
+            if (o.autoSubmit && text.length >= o.max) setTimeout(done, 160);   // let the last dot show
+        }
+        function del() { if (text) { text = text.slice(0, -1); changed(); } }
+        function done() {
+            if (submitted || closed || (pin && text.length < o.max)) return;
+            submitted = true;
+            closeIme();
+            closeSheet();
+            o.onDone(text);
+        }
+
+        /* The TV's own keyboard (and the SmartThings phone app) types into the real input on the display. */
+        function openIme() {
+            nativeInput = { field: field, submit: done, close: closeIme };
+            disp.classList.add('ime');
+            field.value = text;
+            field.focus();
+        }
+        function closeIme() {
+            if (nativeInput && nativeInput.field === field) nativeInput = null;
+            disp.classList.remove('ime');
+            if (document.activeElement === field) field.blur();
+        }
+        field.addEventListener('input', function () {
+            var v = numeric ? field.value.replace(/\D/g, '') : field.value;
+            if (o.max) v = v.slice(0, o.max);
+            if (v !== text) { text = v; changed(); }
+            if (o.autoSubmit && text.length >= o.max) setTimeout(done, 160);
+        });
+        field.addEventListener('blur', function () { if (nativeInput && nativeInput.field === field) closeIme(); });
+
+        var dock = !!o.dock && !numeric;
+        openSheet(title, [], {
+            footer: wrap, wide: !numeric, note: note, host: dock ? 'kb-dock' : '',
+            onClose: function () {
+                closed = true;
+                closeIme();
+                if (entry === me) entry = null;
+                if (!submitted) o.onCancel(original, text);
+            }
+        });
+        sheet.el.classList.add('kb-card');
+        if (numeric) sheet.el.classList.add('kb-card-num');
+        me = entry = { card: sheet.el, type: type, del: del, numeric: numeric };
         draw();
-        focus(keyEls[1][0]);
+        var start = rows[numeric ? 1 : 2][0];   // "1" on a number pad, "q" on the keyboard
+        col = start.c + start.w / 2;
+        focus(start.el);
     }
 
     /* Remote keys while the keyboard is open: number keys type digits. */
-    var entry = null;
     function entryKey(key) {
-        if (!entry || !sheet) return false;
+        if (!entry || !sheet || sheet.el !== entry.card) return false;
         var m = /^d(\d)$/.exec(key);
         if (m) { entry.type(m[1]); return true; }
         return false;
     }
 
-    /* Keys while the TV keyboard is open: Done (or Enter) keeps the text, Cancel or Back leaves the field.
-     * Returns true when the key belonged to the field. */
+    /* Raw key events, before the remote's key routing. Returns true when the key was used here.
+     * While the TV keyboard is open: Done or Enter sends the text, Cancel or Back returns to the on-screen keys.
+     * While the on-screen keyboard is open: a hardware keyboard types, Backspace and Delete delete. */
     function nativeKey(e) {
-        if (!nativeInput || document.activeElement !== nativeInput.field) return false;
         var c = e.keyCode;
-        if (c === 13 || c === 65376 || c === 65385 || c === 10009 || c === 27) {
-            e.preventDefault();
-            var n = nativeInput;
-            n.field.blur();
-            n.done();
+        if (nativeInput && document.activeElement === nativeInput.field) {
+            if (c === 13 || c === 65376) { e.preventDefault(); nativeInput.submit(); return true; }
+            if (c === 65385 || c === 10009 || c === 27) { e.preventDefault(); nativeInput.close(); return true; }
+            // Up and down leave the field for the on-screen keys; everything else is typing.
+            if (c === 38 || c === 40) { nativeInput.close(); return false; }
             return true;
         }
-        // Up and down leave the field for the keyboard; everything else is typing.
-        if (c === 38 || c === 40) { nativeInput.field.blur(); nativeInput.done(); return false; }
-        return true;
-    }
-
-    // Number pad for Plex Home PINs.
-    function pinPad(title, cb) {
-        var digits = '';
-        var display = el('div', 'pin-display', '');
-        var pad = el('div', 'hlist pin-pad');
-        function draw() { display.textContent = digits ? digits.replace(/./g, '●') : '– – – –'; }
-        '1234567890'.split('').concat(['⌫']).forEach(function (k) {
-            var b = el('div', 'key focusable', k);
-            b._select = function () {
-                if (k === '⌫') digits = digits.slice(0, -1);
-                else if (digits.length < 4) digits += k;
-                draw();
-                if (digits.length === 4) { closeSheet(); cb(digits); }
-            };
-            pad.appendChild(b);
-        });
-        draw();
-        var foot = el('div', 'pin-wrap');
-        foot.appendChild(display);
-        foot.appendChild(pad);
-        openSheet(title, [], { footer: foot });
+        if (!entry || !sheet || sheet.el !== entry.card) return false;
+        if (c === 8 || c === 46) { e.preventDefault(); entry.del(); return true; }
+        var k = e.key;
+        if (k && k.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+            e.preventDefault();
+            entry.type(k);
+            return true;
+        }
+        return false;
     }
 
     /* ---------- screen plumbing ---------- */
 
+    /* Each stack entry keeps its rendered page while it is covered, so Back puts it back at once with the same scroll
+     * and focus. A covered page is detached from the document (its timers and previews see that and stop). */
+    var KEEP_PAGES = 6;      // covered pages kept alive; older ones render again when you come back
+    var dirty = 0;           // bumps whenever the current screen re-renders after a change (watched, favourite, playback)
+
+    function stash(entry) {
+        if (!entry || !entry.page || entry.page.parentNode !== app()) return;
+        var f = focusables();
+        entry.focusEl = focused && entry.page.contains(focused) ? focused : null;
+        entry.focusIndex = f.indexOf(focused);
+        entry.bd = { url: bd.url, mode: document.getElementById('backdrop').className.replace(/^bd-/, '') };
+        entry.scrolled = document.body.classList.contains('scrolled');
+        entry.dirty = dirty;
+        app().removeChild(entry.page);
+        if (focused) focused.classList.remove('focused');
+        focused = null;
+    }
+
+    function drop(entry) {
+        if (entry && entry.page) { entry.page._dead = true; entry.page = null; entry.focusEl = null; }
+    }
+
+    function trim() {
+        for (var i = 0; i < stack.length - 1 - KEEP_PAGES; i++) drop(stack[i]);
+    }
+
     function push(render, tab) {
-        if (stack.length) stack[stack.length - 1].focusIndex = focusables().indexOf(focused);
+        if (window.IPTVPlayer) IPTVPlayer.stopPreview();
+        closeSheet(true);
+        var top = stack[stack.length - 1];
+        if (top) {
+            if (top.page) stash(top);
+            else top.focusIndex = focusables().indexOf(focused);
+        }
         stack.push({ render: render, focusIndex: -1, tab: tab });
+        trim();
         show();
     }
 
-    function replace(render, tab) { stack = []; push(render, tab); }
+    // focusSel: what to focus once it is drawn (default: the remembered position, else data-autofocus).
+    function replace(render, tab, focusSel) {
+        stack.forEach(drop);
+        if (!tab) { drop(modeRoots.plex); drop(modeRoots.iptv); modeRoots = {}; }   // sign-in, servers: start over
+        stack = [];
+        push(render, tab);
+        if (focusSel) stack[0].focusSel = focusSel;
+    }
 
+    function modeOf(tab) { return tab && String(tab).indexOf('iptv') === 0 ? 'iptv' : 'plex'; }
+    function rootTab() {
+        var t = stack[0] && stack[0].tab;
+        return t === 'iptv' && window.IPTVUI ? 'iptv:' + IPTVUI.section() : t;
+    }
+
+    // Back on a root tab goes to that mode's Home; on Home itself it returns false (main.js asks for a second press to exit).
     function back() {
         if (closeSheet()) return true;
-        if (stack.length > 1) { stack.pop(); show(); return true; }
-        if (stack[0] && stack[0].tab && stack[0].tab !== 'home' && Plex.state.token) { replace(homeScreen, 'home'); return true; }
+        if (stack.length > 1) { drop(stack.pop()); restore(); return true; }
+        var t = rootTab();
+        if (!t || t === 'home' || t === 'iptv:home') return false;
+        if (modeOf(t) === 'iptv') { goTab('iptv:home'); return true; }
+        if (Plex.state.token && Plex.state.server) { goTab('home'); return true; }
         return false;
     }
 
-    function show() {
+    // Put a kept page back (instant), or render it again when it was not kept.
+    function restore(focusSel) {
         var top = stack[stack.length - 1];
+        if (!top.page) { if (focusSel) top.focusSel = focusSel; return show(); }
         if (window.IPTVPlayer) IPTVPlayer.stopPreview();
         closeSheet(true);
+        if (focused) focused.classList.remove('focused');
         focused = null;
-        document.body.classList.remove('scrolled');
-        var page = el('div', 'page');
-        var spinner = el('div', 'spinner');
         var root = app();
         root.innerHTML = '';
-        root.appendChild(spinner);
+        top.page.classList.add('restored');   // no slide-in animation when it comes back
+        root.appendChild(top.page);
+        document.body.classList.toggle('scrolled', !!top.scrolled);
+        if (top.bd) backdrop(top.bd.url, top.bd.mode);
+        var f = focusables();
+        var target = (focusSel && top.page.querySelector(focusSel)) ||
+            (top.focusEl && top.page.contains(top.focusEl) ? top.focusEl : null) || f[top.focusIndex] || top.page.querySelector('[data-autofocus]') || f[0];
+        focus(target);
+        // Something changed while it was covered (played, marked watched, favourite): refresh it quietly underneath.
+        if (top.dirty !== dirty) show(true);
+    }
+
+    // Root tabs: 'home', 'lib<key>', 'search', 'settings' (Plex) and 'iptv:<section>' (Live TV).
+    function goTab(id, focusSel) {
+        var render;
+        if (modeOf(id) === 'iptv') {
+            var sec = id.split(':')[1] || 'home';
+            render = function (p) { IPTVUI.section(sec); return IPTVUI.screen(p); };
+        } else if (id === 'home') render = homeScreen;
+        else if (id === 'search') render = searchScreen;
+        else if (id === 'settings') render = settingsScreen;
+        else {
+            var l = (libs || []).filter(function (x) { return 'lib' + x.key === id; })[0];
+            if (!l) return goTab('home', focusSel);
+            render = function (p) { return libraryScreen(p, l, true); };
+        }
+        replace(render, id, focusSel || '[data-id="tab-' + id + '"]');
+    }
+
+    /* The Plex | Live TV switch: each side keeps its last root screen, so switching back is instant. */
+    var modeRoots = {};
+    function switchMode(mode) {
+        var cur = modeOf(rootTab());
+        if (mode === cur) return;
+        if (mode === 'plex' && !Plex.state.token) { Util.store('iptv.only', null); Util.store('app.mode', 'plex'); replace(signInScreen); return; }
+        if (mode === 'plex' && !Plex.state.server) { Util.store('app.mode', 'plex'); replace(serversScreen); return; }
+        if (window.IPTVPlayer) IPTVPlayer.stopPreview();
+        closeSheet(true);
+        var keep = stack[0];
+        if (stack.length === 1 && keep.tab && keep.page) {
+            keep.tab = rootTab();   // pin the Live TV section it shows
+            stash(keep);
+            if (modeRoots[cur] && modeRoots[cur] !== keep) drop(modeRoots[cur]);
+            modeRoots[cur] = keep;
+        } else stack.forEach(drop);
+        Util.store('app.mode', mode);
+        var saved = modeRoots[mode];
+        modeRoots[mode] = null;
+        var seg = '[data-id="seg-' + mode + '"]';
+        if (saved && saved.page) {
+            stack = [saved];
+            if (mode === 'iptv' && /^iptv:/.test(saved.tab)) IPTVUI.section(saved.tab.split(':')[1]);
+            restore(seg);
+        } else goTab(mode === 'iptv' ? 'iptv:home' : 'home', seg);
+    }
+
+    // quiet: render the screen again without a spinner, keeping the current page until the new one is ready.
+    function show(quiet) {
+        var top = stack[stack.length - 1];
+        if (!top) return;
+        var root = app();
+        var onScreen = !!(top.page && top.page.parentNode === root);
+        if (!quiet) {
+            if (window.IPTVPlayer) IPTVPlayer.stopPreview();
+            closeSheet(true);
+            if (onScreen) dirty++;
+        }
+        if (!onScreen) {
+            focused = null;
+            document.body.classList.remove('scrolled');
+            root.innerHTML = '';
+            root.appendChild(el('div', 'spinner'));
+        }
+        var page = el('div', 'page' + (onScreen ? ' restored' : ''));
         Promise.resolve().then(function () { return top.render(page); }).then(function () {
-            if (stack[stack.length - 1] !== top) return;
+            if (stack[stack.length - 1] !== top) { page._dead = true; return; }
+            // Keep focus on the same thing: the element with the same id nearest to where focus was, else the same position.
+            var old = top.page && top.page.parentNode === root ? top.page : null;
+            var oldIdx = old ? focusables().indexOf(focused) : top.focusIndex;
+            var oldId = old && focused && old.contains(focused) ? focused.getAttribute('data-id') : null;
+            if (old && sheet) {
+                if (quiet) { page._dead = true; top.dirty = -1; return; }   // a sheet is open on it: refresh later
+                closeSheet(true);
+            }
+            if (old) old._dead = true;
             root.innerHTML = '';
             root.appendChild(page);
+            top.page = page;
+            top.dirty = dirty;
+            if (focused) focused.classList.remove('focused');
+            focused = null;
+            document.body.classList.remove('scrolled');
             var f = focusables();
-            var idx = top.focusIndex;
-            var tabEl = top.onTab && page.querySelector('.tab.active');
-            focus(idx >= 0 && f[idx] ? f[idx] : (tabEl || page.querySelector('[data-autofocus]') || f[0]));
+            var target = null;
+            if (oldId) {
+                var best = Infinity;
+                f.forEach(function (x, n) { if (x.getAttribute('data-id') === oldId && Math.abs(n - oldIdx) < best) { best = Math.abs(n - oldIdx); target = x; } });
+            }
+            if (!target && top.focusSel) { target = page.querySelector(top.focusSel); top.focusSel = null; }
+            if (!target && oldIdx >= 0) target = f[oldIdx];
+            focus(target || page.querySelector('[data-autofocus]') || f[0]);
         }).catch(function (err) {
             if (stack[stack.length - 1] !== top) return;
+            if (quiet && top.page && top.page.parentNode === root) return;   // keep what is on screen
+            drop(top);
             root.innerHTML = '';
             var box = el('div', 'page center-box');
             box.appendChild(el('h1', '', 'Something went wrong'));
             box.appendChild(el('p', 'bad', Util.esc(err.message || err)));
             var bl = el('div', 'hlist btn-row');
-            bl.appendChild(button('Try Again', show, 'primary'));
+            bl.appendChild(button('Try Again', function () { show(); }, 'primary'));
             bl.appendChild(button('Change Server', function () { replace(serversScreen); }));
             box.appendChild(bl);
             root.appendChild(box);
@@ -561,21 +855,38 @@ var UI = (function () {
         });
     }
 
+    /* Top bar: a Plex | Live TV switch at the left (the two sides work like two apps), then the side's own tabs. */
     function nav(active) {
+        var mode = modeOf(active);
         var bar = el('div', 'nav');
         bar.setAttribute('data-anchor', 'top');
+        var sw = el('div', 'modes hlist');
+        [['plex', 'Plex'], ['iptv', 'Live TV']].forEach(function (m) {
+            var b = el('div', 'seg focusable' + (m[0] === mode ? ' active' : ''), m[1]);
+            b.setAttribute('data-id', 'seg-' + m[0]);
+            b._select = function () { switchMode(m[0]); };
+            sw.appendChild(b);
+        });
         var tabs = el('div', 'tabs hlist');
-        function tab(id, label, render) {
+        sw._edge = function (dir) { if (dir === 'right') focus(tabs.querySelector('.tab.active') || tabs.firstChild); };
+        tabs._edge = function (dir) { if (dir === 'left') focus(sw.querySelector('.seg.active')); };
+        function tab(id, label) {
             var t = el('div', 'tab focusable' + (id === active ? ' active' : ''), Util.esc(label));
             t.setAttribute('data-id', 'tab-' + id);
-            t._select = function () { if (id !== active) { replace(render, id); stack[0].onTab = true; } };
+            t._select = function () { if (id !== active) goTab(id); };
             tabs.appendChild(t);
+            return t;
         }
-        if (Plex.state.token) tab('home', 'Home', homeScreen);
-        tab('iptv', 'Live TV', function (p) { return IPTVUI.screen(p); });
-        (libs || []).forEach(function (l) { tab('lib' + l.key, l.title, function (p) { return libraryScreen(p, l, true); }); });
-        tab('search', 'Search', searchScreen);
-        tab('settings', 'Settings', settingsScreen);
+        if (mode === 'iptv') {
+            IPTVUI.sections().forEach(function (x) { tab('iptv:' + x[0], x[1]); });
+        } else {
+            if (Plex.state.token) tab('home', 'Home');
+            (libs || []).forEach(function (l) { tab('lib' + l.key, l.title); });
+            tab('search', 'Search');
+            tab('settings', 'Settings');
+        }
+        if (tabs.children.length > 7) tabs.classList.add('many');
+        bar.appendChild(sw);
         bar.appendChild(tabs);
         var u = Plex.state.user;
         var right = el('div', 'nav-right', '<span class="clock">' + Util.fmtClock(new Date()) + '</span>');
@@ -668,7 +979,7 @@ var UI = (function () {
             page.appendChild(el('p', 'muted', 'This screen moves on by itself once you sign in.'));
             var bl = el('div', 'hlist btn-row');
             bl.appendChild(button('New Code', function () { replace(signInScreen); }));
-            bl.appendChild(button('Live TV only (IPTV, no Plex)', function () { clearInterval(pinPoll); pinPoll = null; Util.store('iptv.only', true); replace(function (p) { return IPTVUI.screen(p); }, 'iptv'); }));
+            bl.appendChild(button('Live TV only (IPTV, no Plex)', function () { clearInterval(pinPoll); pinPoll = null; Util.store('iptv.only', true); Util.store('app.mode', 'iptv'); goTab('iptv:home'); }));
             page.appendChild(bl);
             var ids = [pin.id].concat(strong ? [strong.id] : []);
             pinPoll = setInterval(function () {
@@ -823,18 +1134,24 @@ var UI = (function () {
                 b._focus = function () { backdrop(Plex.imageUrl(artOf(it), 1920, 1080), 'hero'); arm(); };
             });
             if (focusIdx >= 0) focus(btns.children[Math.min(focusIdx, btns.children.length - 1)]);
-            else if (!focused || !app().contains(focused) || focused.closest('.hero')) backdrop(Plex.imageUrl(artOf(it), 1920, 1080), 'hero');
+            else if (!focused || !app().contains(focused) || focused.closest('.hero') || focused.closest('.nav')) backdrop(Plex.imageUrl(artOf(it), 1920, 1080), 'hero');
         }
         function step(d) { i = (i + d + items.length) % items.length; render(d > 0 ? 'from-right' : 'from-left'); }
+        /* Every 9 s the hero moves on, but not while you are on its buttons (you are reading or about to press Play),
+         * nor while its page is covered, a sheet is open or something plays. It stops for good once the page is gone. */
         function arm() {
             clearTimeout(timer);
             timer = setTimeout(function () {
-                if (!document.body.contains(h) || Player.active()) return;
-                if (focused && btns.contains(focused) && !sheet) step(1); else arm();
+                var pg = h.closest('.page');
+                if (!pg || pg._dead) return;
+                if (document.body.contains(h) && !Player.active() && !IPTVPlayer.active() && !sheet && !document.hidden &&
+                    !(focused && btns.contains(focused))) step(1);
+                arm();
             }, 9000);
         }
         btns._edge = function (dir) { if (items.length > 1) step(dir === 'right' ? 1 : -1); };
         render();
+        if (items.length > 1) arm();
         return h;
     }
 
@@ -1309,9 +1626,10 @@ var UI = (function () {
                     searchState.results = res; drawResults();
                 }).catch(function (e) { Util.toast(e.message); });
             }, 450);
-            // The same keyboard as everywhere else; the results follow what was typed.
+            // The same keyboard as everywhere else, docked to the left: the results follow each key press beside it.
+            function typed(t) { searchState.q = t; drawQ(); run(); }
             [['⌕  Type to search', function () {
-                textEntry('Search Plex', searchState.q, function (t) { searchState.q = t; rememberSearch(t); drawQ(); run(); });
+                textEntry('Search Plex', searchState.q, function (t) { rememberSearch(t); typed(t); }, null, { live: typed, dock: true, placeholder: 'Movies, shows, episodes, collections' });
             }], ['Clear', function () { searchState.q = ''; drawQ(); run(); }]].forEach(function (k) {
                 var b = el('div', 'key wide focusable', k[0]);
                 b._select = k[1];
@@ -1371,10 +1689,13 @@ var UI = (function () {
         return o ? o.label : String(settings[key]);
     }
 
-    function settingsScreen(page) {
+    // embedded: opened from Live TV → Settings (no Plex tab bar; works without a Plex sign-in).
+    function settingsScreen(page, embedded) {
         backdrop(null, 'plain');
-        return ensureLibs().then(function () {
-            page.appendChild(nav('settings'));
+        var plex = !!(Plex.state.token && Plex.state.server);
+        return (embedded ? Promise.resolve() : ensureLibs()).then(function () {
+            if (!embedded) page.appendChild(nav('settings'));
+            else page.appendChild(el('h1', 'page-title settings-title', 'Lumen Settings'));
             page.setAttribute('data-offset', '300');
             var col = el('div', 'settings');
             page.appendChild(col);
@@ -1393,8 +1714,9 @@ var UI = (function () {
                 }, key);
             }
             section('Account');
-            row('User', Plex.state.user ? Plex.state.user.title : 'Plex account', switchUserSheet, 'user');
-            row('Server', Plex.state.server ? Plex.state.server.name : '-', function () { replace(serversScreen); }, 'server');
+            if (!plex) row('Plex', 'Not signed in', function () { Util.store('iptv.only', null); replace(signInScreen); }, 'signin');
+            else row('User', Plex.state.user ? Plex.state.user.title : 'Plex account', switchUserSheet, 'user');
+            if (plex) row('Server', Plex.state.server ? Plex.state.server.name : '-', function () { replace(serversScreen); }, 'server');
             section('Audio');
             opt('Dolby TrueHD', 'truehd');
             opt('Preferred audio language', 'audioLang');
@@ -1444,7 +1766,7 @@ var UI = (function () {
                     '<p class="muted">Browsing: hold OK (or press Info) on a poster for Play, Play from Beginning, Mark Watched, Go to Show and more.</p>' +
                     '<p class="muted">Remotes with colour keys: Yellow switches between direct play and converted audio, Blue / Green open audio / subtitles, Red opens Picture.</p>' }, { label: 'Close' }], { wide: true });
             }, 'keys');
-            row('Sign out', '', function () { Plex.signOut(); libs = null; replace(signInScreen); }, 'signout');
+            if (plex) row('Sign out', '', function () { Plex.signOut(); libs = null; replace(signInScreen); }, 'signout');
             col.appendChild(el('p', 'muted small', 'Player: ' + Util.esc(Player.engineName()) + ' · Server: ' + Util.esc(Plex.state.server ? Plex.state.server.uri : '-')));
         });
     }
@@ -1470,10 +1792,12 @@ var UI = (function () {
         }, function (e) { Util.toast(e.message, 6000); });
     }
 
+    // Opens on the side (Plex or Live TV) that was used last.
     function start() {
-        if (!Plex.state.token && Util.store('iptv.only')) replace(function (p) { return IPTVUI.screen(p); }, 'iptv');
+        if (!Plex.state.token && Util.store('iptv.only')) goTab('iptv:home', '[data-autofocus]');
         else if (!Plex.state.token) replace(signInScreen);
         else if (!Plex.state.server) replace(serversScreen);
+        else if (Util.store('app.mode') === 'iptv') goTab('iptv:home', '[data-autofocus]');
         else replace(homeScreen, 'home');
     }
 
@@ -1487,7 +1811,8 @@ var UI = (function () {
         kit: {
             el: el, button: button, lazyImg: lazyImg, push: push, replace: replace, show: show, nav: nav, focus: focus, refocus: refocus,
             focused: function () { return focused; }, nativeKey: nativeKey, entryKey: entryKey, openSheet: openSheet, closeSheet: closeSheet, choose: choose, textEntry: textEntry,
-            pinPad: pinPad, backdrop: backdrop, ensureLibs: ensureLibs, signIn: function () { Util.store('iptv.only', null); replace(signInScreen); }
+            pinPad: pinPad, backdrop: backdrop, ensureLibs: ensureLibs, signIn: function () { switchMode('plex'); },
+            appSettings: function () { push(function (p) { return settingsScreen(p, true); }); }
         }
     };
 })();

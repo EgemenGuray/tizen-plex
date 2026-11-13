@@ -425,7 +425,48 @@ var Player = (function () {
         $('osd-badges').innerHTML = bits.map(function (b) { return '<span class="badge">' + Util.esc(b) + '</span>'; }).join('');
     }
 
+    // Screensaver off only while the picture moves.
+    function saver() { Util.screenSaver(!(s && s.prepared && !s.suspended && !engine.isPaused())); }
+
+    /* App lifecycle: the TV hides the app (Home, Source, another app). Save the position and suspend AVPlay; on return
+     * restore it, or open the file again at the saved position if the restore fails (the server session may be gone). */
+    function suspend() {
+        if (!s || s.suspended) return;
+        report();
+        Memory.flush();
+        s.suspended = { at: Date.now(), wasPaused: s.prepared && engine.isPaused() };
+        clearTimeout(osdTimer);
+        if (engine === AvplayEngine) {
+            try { webapis.avplay.suspend(); s.suspended.how = 'suspend'; }
+            catch (e) { engine.close(); s.suspended.how = 'closed'; }
+        } else {
+            engine.pause();
+            s.suspended.how = 'paused';
+        }
+        Util.screenSaver(true);
+    }
+
+    function resume() {
+        if (!s || !s.suspended) return;
+        var sp = s.suspended;
+        s.suspended = null;
+        var reopen = function () { engine.close(); load(s.lastTime); };
+        if (sp.how === 'closed') reopen();
+        else if (sp.how === 'suspend') {
+            // A server-converted stream does not survive a long break: open it again where it was.
+            if (s.mode !== 'direct' && Date.now() - sp.at > 5 * 60000) reopen();
+            else {
+                try {
+                    webapis.avplay.restore();
+                    if (!sp.wasPaused && webapis.avplay.getState() !== 'PLAYING') webapis.avplay.play();
+                } catch (e) { reopen(); }
+            }
+        } else if (!sp.wasPaused) engine.play();
+        showOsd();
+    }
+
     function showOsd() {
+        saver();
         var ui = $('player-ui');
         ui.classList.add('osd');
         drawTime();
@@ -437,7 +478,7 @@ var Player = (function () {
     }
 
     function report() {
-        if (!s) return;
+        if (!s || s.suspended) return;
         if (s.prepared) Memory.savePosition(s.item, s.lastTime, s.duration);
         Plex.timeline(s.item, s.prepared && engine.isPaused() ? 'paused' : 'playing', s.lastTime, s.duration);
     }
@@ -975,6 +1016,7 @@ var Player = (function () {
         if (cur.prepared) { Memory.savePosition(cur.item, cur.lastTime, cur.duration); Memory.flush(); }
         if (cur.duration && cur.lastTime / cur.duration > 0.9) Plex.scrobble(cur.item);
         document.body.classList.remove('playing');
+        Util.screenSaver(true);
         $('player-ui').className = 'hidden';
         $('panel').classList.add('hidden');
         $('upnext').classList.add('hidden');
@@ -985,5 +1027,5 @@ var Player = (function () {
 
     function stop(ended) { stopInternal(true); if (ended) Util.toast('Finished'); }
 
-    return { start: start, handleKey: handleKey, active: function () { return !!s; }, engineName: function () { return engine.name; } };
+    return { start: start, handleKey: handleKey, active: function () { return !!s; }, engineName: function () { return engine.name; }, suspend: suspend, resume: resume };
 })();
